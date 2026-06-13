@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common'
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common'
 
 import { FeaturesService } from './features.service'
 
@@ -20,5 +20,12 @@ export class FeaturesController {
   getProfile(@Param('bindingId') bindingId: string) {
     return this.featuresService.getFeature(bindingId, 'profile')
   }
-}
 
+  @Post('profile')
+  saveProfile(
+    @Param('bindingId') bindingId: string,
+    @Body() input: { profile?: Record<string, unknown> },
+  ) {
+    return this.featuresService.saveProfile(bindingId, input.profile ?? {})
+  }
+}

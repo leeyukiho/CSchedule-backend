@@ -1,47 +1,78 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { Prisma } from '@prisma/client'
-import { createHash } from 'crypto'
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import { createHash } from "crypto";
 
-import { PrismaService } from '../../common/prisma/prisma.service'
-import { DataAccessMode, DataTarget } from '../providers/provider.types'
+import { PrismaService } from "../../common/prisma/prisma.service";
+import { StudentIdentityService } from "../bindings/student-identity.service";
+import { DataAccessMode, DataTarget } from "../providers/provider.types";
 
 export interface RawDataUploadRequest {
-  contextId?: string
-  target: DataTarget
-  accessMode: Extract<DataAccessMode, 'webview_client_fetch' | 'manual_import'>
-  termId?: string
-  contentType: 'json' | 'html' | 'text' | 'csv' | 'xlsx' | 'ics' | 'pdf'
-  sourceUrl?: string
-  payload: unknown
-  meta?: Record<string, unknown>
+  contextId?: string;
+  target: DataTarget;
+  accessMode: Extract<DataAccessMode, "webview_client_fetch" | "manual_import">;
+  termId?: string;
+  contentType: "json" | "html" | "text" | "csv" | "xlsx" | "ics" | "pdf";
+  sourceUrl?: string;
+  payload: unknown;
+  meta?: Record<string, unknown>;
 }
 
 @Injectable()
 export class RawDataService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly studentIdentity: StudentIdentityService,
+  ) {}
 
   async uploadRawData(bindingId: string, input: RawDataUploadRequest) {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
+    let binding = await this.prisma.userSchoolBinding.findUnique({
       where: { id: bindingId },
-    })
+    });
 
     if (!binding) {
-      throw new NotFoundException('Binding not found')
+      throw new NotFoundException("Binding not found");
     }
 
     if (!input.target || !input.accessMode || !input.contentType) {
-      throw new BadRequestException('target, accessMode and contentType are required')
+      throw new BadRequestException(
+        "target, accessMode and contentType are required",
+      );
     }
 
-    const parsed = this.parsePayload(input)
-    const sourceHash = this.createSourceHash(input)
-    const syncedAt = new Date()
+    const parsed = this.parsePayload(input);
+    const studentNo =
+      this.studentIdentity.extractStudentNo(input.meta) ??
+      this.studentIdentity.extractStudentNo(input.payload) ??
+      this.studentIdentity.extractStudentNo(parsed.data) ??
+      this.studentIdentity.extractStudentNo(parsed.meta);
+    const displayName =
+      this.studentIdentity.extractDisplayName(input.meta) ??
+      this.studentIdentity.extractDisplayName(input.payload) ??
+      this.studentIdentity.extractDisplayName(parsed.data) ??
+      this.studentIdentity.extractDisplayName(parsed.meta);
 
-    if (input.target === 'course') {
+    if (studentNo) {
+      binding = await this.studentIdentity.bindStudentIdentity({
+        bindingId: binding.id,
+        schoolId: binding.schoolId,
+        providerId: binding.providerId,
+        studentNo,
+        displayName,
+      });
+    }
+
+    const sourceHash = this.createSourceHash(input);
+    const syncedAt = new Date();
+
+    if (input.target === "course") {
       await this.prisma.courseCache.create({
         data: {
           userId: binding.userId,
-          bindingId,
+          bindingId: binding.id,
           schoolId: binding.schoolId,
           providerId: binding.providerId,
           termId: input.termId ?? parsed.termId,
@@ -51,12 +82,12 @@ export class RawDataService {
           sourceHash,
           syncedAt,
         },
-      })
+      });
     } else {
       await this.prisma.featureCache.create({
         data: {
           userId: binding.userId,
-          bindingId,
+          bindingId: binding.id,
           schoolId: binding.schoolId,
           providerId: binding.providerId,
           target: input.target,
@@ -66,18 +97,18 @@ export class RawDataService {
           sourceHash,
           syncedAt,
         },
-      })
+      });
     }
 
     await this.prisma.$transaction([
       this.prisma.userSchoolBinding.update({
-        where: { id: bindingId },
+        where: { id: binding.id },
         data: {
-          status: 'active',
+          status: "active",
           cacheState: this.toJson({
-            ...(this.asRecord(binding.cacheState)),
+            ...this.asRecord(binding.cacheState),
             [input.target]: {
-              status: 'cached',
+              status: "cached",
               termId: input.termId ?? parsed.termId,
               syncedAt: syncedAt.toISOString(),
             },
@@ -90,90 +121,111 @@ export class RawDataService {
       this.prisma.syncRecord.create({
         data: {
           userId: binding.userId,
-          bindingId,
+          bindingId: binding.id,
           schoolId: binding.schoolId,
           providerId: binding.providerId,
           target: input.target,
-          status: 'success',
+          status: "success",
           startedAt: syncedAt,
           finishedAt: syncedAt,
         },
       }),
-    ])
+    ]);
 
     return {
-      bindingId,
+      bindingId: binding.id,
       target: input.target,
       cacheId: sourceHash,
-      status: 'cached',
+      status: "cached",
       parsedCount: parsed.count,
       warnings: parsed.warnings,
-    }
+    };
   }
 
-  async completeWebviewSync(bindingId: string, completedTargets: DataTarget[] = []) {
+  async completeWebviewSync(
+    bindingId: string,
+    completedTargets: DataTarget[] = [],
+  ) {
     const binding = await this.prisma.userSchoolBinding.findUnique({
       where: { id: bindingId },
       include: {
         courseCaches: {
           select: { id: true },
           take: 1,
-          orderBy: { syncedAt: 'desc' },
+          orderBy: { syncedAt: "desc" },
         },
       },
-    })
+    });
 
     if (!binding) {
-      throw new NotFoundException('Binding not found')
+      throw new NotFoundException("Binding not found");
     }
 
     const hasCourseCache =
-      completedTargets.includes('course') || binding.courseCaches.length > 0
-    const missingRequiredTargets = hasCourseCache ? [] : ['course']
+      completedTargets.includes("course") || binding.courseCaches.length > 0;
+    const missingRequiredTargets = hasCourseCache ? [] : ["course"];
 
     return {
       bindingId,
-      status: missingRequiredTargets.length === 0 ? 'ready' : 'partial',
+      status: missingRequiredTargets.length === 0 ? "ready" : "partial",
       canCloseWebview: missingRequiredTargets.length === 0,
       sessionReusable: binding.sessionReusable,
       sessionExpireAt: binding.sessionExpireAt?.toISOString(),
       missingRequiredTargets,
-    }
+    };
   }
 
   private parsePayload(input: RawDataUploadRequest) {
-    const envelope = this.asRecord(input.payload)
-    const source = envelope.data ?? envelope.result ?? envelope
-    const sourceRecord = this.asRecord(source)
+    const envelope = this.asRecord(input.payload);
+    const source = envelope.data ?? envelope.result ?? envelope;
+    const sourceRecord = this.asRecord(source);
 
-    if (input.target === 'course') {
-      const courses = this.findArray(source, ['courses', 'courseList', 'lessons'])
+    if (input.target === "course") {
+      const courses = this.findArray(source, [
+        "courses",
+        "courseList",
+        "lessons",
+      ]);
 
       if (!courses) {
-        throw new BadRequestException('RAW_PAYLOAD_INVALID: course payload must include courses')
+        throw new BadRequestException(
+          "RAW_PAYLOAD_INVALID: course payload must include courses",
+        );
       }
 
       return {
-        data: courses.map((course, index) => this.normalizeCourse(course, index)),
-        terms: this.findArray(source, ['terms', 'semesters']) ?? [],
-        sectionTimes: this.findArray(source, ['sectionTimes', 'sections']) ?? [],
-        termId: this.asOptionalString(sourceRecord.termId ?? sourceRecord.selectedSemesterId),
+        data: courses.map((course, index) =>
+          this.normalizeCourse(course, index),
+        ),
+        terms: this.findArray(source, ["terms", "semesters"]) ?? [],
+        sectionTimes:
+          this.findArray(source, ["sectionTimes", "sections"]) ?? [],
+        termId: this.asOptionalString(
+          sourceRecord.termId ?? sourceRecord.selectedSemesterId,
+        ),
         meta: this.asRecord(input.meta),
         count: courses.length,
         warnings: [] as string[],
-      }
+      };
     }
 
-    const featureData = sourceRecord.data ?? source
+    const featureData = sourceRecord.data ?? source;
     const count = Array.isArray(featureData)
       ? featureData.length
-      : this.findArray(featureData, ['items', 'records', 'summary', 'semesters'])?.length ?? 0
+      : (this.findArray(featureData, [
+          "items",
+          "records",
+          "summary",
+          "semesters",
+        ])?.length ?? 0);
 
     return {
       data: featureData ?? null,
       terms: [],
       sectionTimes: [],
-      termId: this.asOptionalString(sourceRecord.termId ?? sourceRecord.selectedSemesterId),
+      termId: this.asOptionalString(
+        sourceRecord.termId ?? sourceRecord.selectedSemesterId,
+      ),
       meta: {
         ...this.asRecord(input.meta),
         contentType: input.contentType,
@@ -181,19 +233,26 @@ export class RawDataService {
       },
       count,
       warnings: [] as string[],
-    }
+    };
   }
 
   private normalizeCourse(value: unknown, index: number) {
-    const course = this.asRecord(value)
-    const sections = this.normalizeSections(course)
-    const startSection = Number(course.startSection ?? sections[0] ?? 1)
-    const endSection = Number(course.endSection ?? sections[sections.length - 1] ?? startSection)
+    const course = this.asRecord(value);
+    const sections = this.normalizeSections(course);
+    const startSection = Number(course.startSection ?? sections[0] ?? 1);
+    const endSection = Number(
+      course.endSection ?? sections[sections.length - 1] ?? startSection,
+    );
 
     return {
       id: this.asOptionalString(course.id) ?? `course-${index + 1}`,
-      name: this.asOptionalString(course.name) ?? this.asOptionalString(course.courseName) ?? '未命名课程',
-      teacher: this.asOptionalString(course.teacher) ?? this.asOptionalString(course.teacherName),
+      name:
+        this.asOptionalString(course.name) ??
+        this.asOptionalString(course.courseName) ??
+        "未命名课程",
+      teacher:
+        this.asOptionalString(course.teacher) ??
+        this.asOptionalString(course.teacherName),
       location:
         this.asOptionalString(course.location) ??
         this.asOptionalString(course.classroom) ??
@@ -214,79 +273,81 @@ export class RawDataService {
             ),
       weeks: this.normalizeNumberArray(course.weeks),
       rawWeeks: this.asOptionalString(course.rawWeeks),
-    }
+    };
   }
 
   private normalizeSections(course: Record<string, unknown>) {
-    const sections = this.normalizeNumberArray(course.sections)
+    const sections = this.normalizeNumberArray(course.sections);
 
     if (sections.length > 0) {
-      return sections
+      return sections;
     }
 
-    const start = Number(course.startSection)
-    const end = Number(course.endSection ?? start)
+    const start = Number(course.startSection);
+    const end = Number(course.endSection ?? start);
 
     if (!Number.isFinite(start) || start <= 0) {
-      return []
+      return [];
     }
 
     return Array.from(
       { length: Math.max((Number.isFinite(end) ? end : start) - start + 1, 1) },
       (_, index) => start + index,
-    )
+    );
   }
 
   private normalizeNumberArray(value: unknown) {
     if (!Array.isArray(value)) {
-      return []
+      return [];
     }
 
     return value
       .map((item) => Number(item))
-      .filter((item) => Number.isFinite(item) && item > 0)
+      .filter((item) => Number.isFinite(item) && item > 0);
   }
 
   private findArray(value: unknown, keys: string[]): unknown[] | undefined {
     if (Array.isArray(value)) {
-      return value
+      return value;
     }
 
-    const record = this.asRecord(value)
+    const record = this.asRecord(value);
 
     for (const key of keys) {
       if (Array.isArray(record[key])) {
-        return record[key] as unknown[]
+        return record[key] as unknown[];
       }
     }
 
-    return undefined
+    return undefined;
   }
 
   private asRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === 'object' && !Array.isArray(value)
+    return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
-      : {}
+      : {};
   }
 
   private asOptionalString(value: unknown) {
-    const text = typeof value === 'string' ? value.trim() : ''
+    const text = typeof value === "string" ? value.trim() : "";
 
-    return text || undefined
+    return text || undefined;
   }
 
   private createSourceHash(input: RawDataUploadRequest) {
-    return createHash('sha256')
-      .update(JSON.stringify({
-        target: input.target,
-        termId: input.termId,
-        contentType: input.contentType,
-        payload: input.payload,
-      }))
-      .digest('hex')
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          target: input.target,
+          termId: input.termId,
+          contentType: input.contentType,
+          payload: input.payload,
+        }),
+      )
+      .digest("hex");
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {
-    return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue
+    return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
   }
 }

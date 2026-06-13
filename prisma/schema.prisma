@@ -118,6 +118,7 @@ model UserSchoolBinding {
   schoolId            String
   providerId          String
   studentNoEncrypted  String?
+  studentNoHash       String?
   displayName         String?
   status              BindingStatus    @default(unbound)
   authState           Json?
@@ -143,6 +144,7 @@ model UserSchoolBinding {
   @@index([userId])
   @@index([schoolId])
   @@index([providerId])
+  @@unique([schoolId, providerId, studentNoHash])
 }
 
 model CourseCache {

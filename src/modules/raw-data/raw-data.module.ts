@@ -1,13 +1,13 @@
-import { Module } from '@nestjs/common'
+import { Module } from "@nestjs/common";
 
-import { PrismaModule } from '../../common/prisma/prisma.module'
-import { RawDataController } from './raw-data.controller'
-import { RawDataService } from './raw-data.service'
+import { BindingsModule } from "../bindings/bindings.module";
+import { PrismaModule } from "../../common/prisma/prisma.module";
+import { RawDataController } from "./raw-data.controller";
+import { RawDataService } from "./raw-data.service";
 
 @Module({
-  imports: [PrismaModule],
+  imports: [BindingsModule, PrismaModule],
   controllers: [RawDataController],
   providers: [RawDataService],
 })
 export class RawDataModule {}
-
