@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  disabled
+  pending
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum SchoolStatus {
+  catalog_only
+  candidate
+  researching
+  beta
+  enabled
+  disabled
+}
+
+enum LoginMode {
+  direct_password
+  password_captcha
+  cas_simple
+  cas_webview
+  oauth_webview
+  qrcode
+}
+
+enum DataAccessMode {
+  server_session
+  webview_client_fetch
+  session_import
+  manual_import
+}
+
+enum DataTarget {
+  course
+  score
+  exam
+  profile
+}
+
+enum CredentialSaveMode {
+  none
+  session_only
+  session_refresh
+  password_vault
+}
+
+enum BindingStatus {
+  active
+  need_login
+  cached_only
+  disabled
+  unbound
+}
+
+enum SyncStatus {
+  pending
+  running
+  success
+  failed
+  need_login
+  need_webview_fetch
+  cancelled
+}
+
+model User {
+  id          String           @id @default(cuid())
+  status      UserStatus       @default(active)
+  role        UserRole         @default(user)
+  bindings    UserSchoolBinding[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model School {
+  id                  String                @id
+  name                String
+  shortName           String?
+  province            String?
+  city                String?
+  aliases             Json                  @default("[]")
+  providerId          String?
+  loginMode           LoginMode?
+  dataAccess          Json?
+  featureCapabilities Json?
+  eduSystemType       String?
+  homepageUrl         String?
+  authUrl             String?
+  enabled             Boolean               @default(false)
+  status              SchoolStatus          @default(catalog_only)
+  capabilities        Json                  @default("{}")
+  config              Json                  @default("{}")
+  verifiedAt          DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  userBindings        UserSchoolBinding[]
+
+  @@index([name])
+  @@index([providerId])
+}
+
+model UserSchoolBinding {
+  id                  String          @id @default(cuid())
+  userId              String
+  schoolId            String
+  providerId          String
+  studentNoEncrypted  String?
+  displayName         String?
+  status              BindingStatus    @default(unbound)
+  authState           Json?
+  cacheState          Json?
+  sessionReusable     Boolean          @default(false)
+  sessionRefreshable  Boolean          @default(false)
+  sessionExpireAt     DateTime?
+  lastSessionValidatedAt DateTime?
+  credentialSaveMode  CredentialSaveMode @default(none)
+  lastAuthErrorCode   String?
+  lastAuthErrorAt     DateTime?
+  lastLoginAt         DateTime?
+  lastCachedAt        DateTime?
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  school              School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  courseCaches        CourseCache[]
+  featureCaches       FeatureCache[]
+  syncRecords         SyncRecord[]
+
+  @@index([userId])
+  @@index([schoolId])
+  @@index([providerId])
+}
+
+model CourseCache {
+  id             String          @id @default(cuid())
+  userId         String
+  bindingId      String
+  schoolId       String
+  providerId     String
+  termId         String?
+  coursesJson    Json
+  termsJson      Json
+  sectionTimesJson Json
+  sourceHash     String
+  syncedAt       DateTime
+  binding        UserSchoolBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([bindingId])
+  @@index([schoolId])
+}
+
+model FeatureCache {
+  id           String          @id @default(cuid())
+  userId       String
+  bindingId    String
+  schoolId     String
+  providerId   String
+  target       DataTarget
+  termId       String?
+  dataJson     Json
+  metaJson     Json?
+  sourceHash   String
+  syncedAt     DateTime
+  binding      UserSchoolBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([bindingId])
+  @@index([target])
+}
+
+model SyncRecord {
+  id            String       @id @default(cuid())
+  userId        String
+  bindingId     String
+  schoolId      String
+  providerId    String
+  target        DataTarget
+  status        SyncStatus   @default(pending)
+  errorCode     String?
+  errorMessage  String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  binding       UserSchoolBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  createdAt     DateTime     @default(now())
+
+  @@index([userId])
+  @@index([bindingId])
+  @@index([status])
+}
+
+model FeedbackItem {
+  id          String   @id @default(cuid())
+  userId      String?
+  bindingId   String?
+  schoolId    String?
+  type        String   @default("experience")
+  content     String
+  contact     String?
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([bindingId])
+  @@index([status])
+}
+
+model SchoolAccessSubmission {
+  id               String   @id @default(cuid())
+  submitterUserId  String?
+  schoolName       String
+  aliases          Json     @default("[]")
+  province         String?
+  city             String?
+  officialWebsite  String?
+  eduSystemWebsite String?
+  loginUrl         String?
+  loginModeHint    LoginMode?
+  requestedTargets DataTarget[] @default([])
+  status           String   @default("submitted")
+  note             String?
+  review           Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([submitterUserId])
+  @@index([status])
+}
