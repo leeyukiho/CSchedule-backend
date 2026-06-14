@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 
+import { CredentialVaultService } from "../../common/crypto/credential-vault.service";
 import { AccountsModule } from "../accounts/accounts.module";
 import { ProvidersModule } from "../providers/providers.module";
 import { CourseSyncService } from "../sync/course-sync.service";
@@ -9,7 +10,7 @@ import { AuthService } from "./auth.service";
 @Module({
   imports: [AccountsModule, ProvidersModule],
   controllers: [AuthController, SessionImportController],
-  providers: [AuthService, CourseSyncService],
+  providers: [AuthService, CourseSyncService, CredentialVaultService],
   exports: [AuthService],
 })
 export class AuthModule {}

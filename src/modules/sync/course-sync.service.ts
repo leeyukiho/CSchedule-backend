@@ -29,6 +29,9 @@ export class CourseSyncService {
     username: string;
     password: string;
     semesterId?: string;
+    allSemesters?: boolean;
+    credentialSaveMode?: "none" | "password_vault";
+    authStatePatch?: Record<string, unknown>;
   }) {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: input.accountId },
@@ -51,12 +54,15 @@ export class CourseSyncService {
       username: input.username,
       password: input.password,
       semesterId: input.semesterId,
+      allSemesters: input.allSemesters,
       providerConfig: this.getProviderConfig(account.school.config),
     });
 
     return this.writeCourseCache({
       account,
       result,
+      credentialSaveMode: input.credentialSaveMode,
+      authStatePatch: input.authStatePatch,
     });
   }
 
@@ -68,54 +74,33 @@ export class CourseSyncService {
       cacheState: Prisma.JsonValue | null;
     };
     result: CourseFetchResult;
+    credentialSaveMode?: "none" | "password_vault";
+    authStatePatch?: Record<string, unknown>;
   }) {
-    const courses = input.result.schedule.courses.map((course, index) =>
-      this.normalizeCourse(course, index),
-    );
-    const termId = input.result.schedule.selectedSemesterId;
+    const schedules = input.result.schedules?.length
+      ? input.result.schedules
+      : [input.result.schedule];
+    const primarySchedule = schedules[0] || input.result.schedule;
+    const writtenCaches = [];
+    let parsedCount = 0;
     const syncedAt = new Date();
-    const terms = input.result.schedule.semesters ?? [];
-    const sectionTimes = input.result.schedule.sectionTimes ?? [];
-    const featureResults = this.getFeatureResults(input.result);
-    const sourceHash = createHash("sha256")
-      .update(
-        JSON.stringify({
-          accountId: input.account.id,
-          providerId: input.account.providerId,
-          termId,
-          courses,
-        }),
-      )
-      .digest("hex");
+    const allTerms = this.mergeTerms(schedules);
 
-    const existingCache = await this.prisma.courseCache.findFirst({
-      where: { accountId: input.account.id, sourceHash },
-      select: { id: true },
-    });
-    const cache = existingCache
-      ? await this.prisma.courseCache.update({
-          where: { id: existingCache.id },
-          data: {
-            termId,
-            coursesJson: this.toJson(courses),
-            termsJson: this.toJson(terms),
-            sectionTimesJson: this.toJson(sectionTimes),
-            syncedAt,
-          },
-        })
-      : await this.prisma.courseCache.create({
-          data: {
-            accountId: input.account.id,
-            schoolId: input.account.schoolId,
-            providerId: input.account.providerId,
-            termId,
-            coursesJson: this.toJson(courses),
-            termsJson: this.toJson(terms),
-            sectionTimesJson: this.toJson(sectionTimes),
-            sourceHash,
-            syncedAt,
-          },
-        });
+    for (const [index, schedule] of schedules.entries()) {
+      const cache = await this.writeScheduleCache({
+        account: input.account,
+        schedule,
+        syncedAt:
+          index === 0
+            ? new Date(syncedAt.getTime() + schedules.length)
+            : syncedAt,
+        terms: allTerms,
+      });
+      writtenCaches.push(cache);
+      parsedCount += cache.parsedCount;
+    }
+
+    const featureResults = this.getFeatureResults(input.result);
 
     for (const feature of featureResults) {
       await this.writeFeatureCache({
@@ -127,6 +112,7 @@ export class CourseSyncService {
     }
 
     const authState = this.toJson({
+      ...input.authStatePatch,
       profile:
         featureResults.find((feature) => feature.target === "profile")?.result
           .data ??
@@ -156,9 +142,10 @@ export class CourseSyncService {
           ),
           course: {
             status: "cached",
-            termId,
+            termId: primarySchedule.selectedSemesterId,
             syncedAt: syncedAt.toISOString(),
-            count: courses.length,
+            count: parsedCount,
+            cachedTerms: schedules.length,
           },
           ...featureResults.reduce<Record<string, unknown>>(
             (state, feature) => {
@@ -175,19 +162,83 @@ export class CourseSyncService {
         sessionReusable: false,
         sessionRefreshable: false,
         sessionExpireAt: null,
-        credentialSaveMode: "none",
+        credentialSaveMode: input.credentialSaveMode || "none",
         lastCachedAt: syncedAt,
         lastAuthErrorCode: null,
         lastAuthErrorAt: null,
       },
     });
 
+    const primaryCache = writtenCaches[0];
+
     return {
       accountId: identityAccount.id,
+      cacheId: primaryCache?.cacheId || "",
+      termId: primarySchedule.selectedSemesterId,
+      parsedCount,
+      syncedAt,
+    };
+  }
+
+  private async writeScheduleCache(input: {
+    account: {
+      id: string;
+      schoolId: string;
+      providerId: string;
+    };
+    schedule: CourseFetchResult["schedule"];
+    syncedAt: Date;
+    terms: unknown[];
+  }) {
+    const courses = input.schedule.courses.map((course, index) =>
+      this.normalizeCourse(course, index),
+    );
+    const termId = input.schedule.selectedSemesterId;
+    const sectionTimes = input.schedule.sectionTimes ?? [];
+    const sourceHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          accountId: input.account.id,
+          providerId: input.account.providerId,
+          termId,
+          courses,
+        }),
+      )
+      .digest("hex");
+
+    const existingCache = await this.prisma.courseCache.findFirst({
+      where: { accountId: input.account.id, sourceHash },
+      select: { id: true },
+    });
+    const cache = existingCache
+      ? await this.prisma.courseCache.update({
+          where: { id: existingCache.id },
+          data: {
+            termId,
+            coursesJson: this.toJson(courses),
+            termsJson: this.toJson(input.terms),
+            sectionTimesJson: this.toJson(sectionTimes),
+            syncedAt: input.syncedAt,
+          },
+        })
+      : await this.prisma.courseCache.create({
+          data: {
+            accountId: input.account.id,
+            schoolId: input.account.schoolId,
+            providerId: input.account.providerId,
+            termId,
+            coursesJson: this.toJson(courses),
+            termsJson: this.toJson(input.terms),
+            sectionTimesJson: this.toJson(sectionTimes),
+            sourceHash,
+            syncedAt: input.syncedAt,
+          },
+        });
+
+    return {
       cacheId: cache.id,
       termId,
       parsedCount: courses.length,
-      syncedAt,
     };
   }
 
@@ -378,6 +429,116 @@ export class CourseSyncService {
     }
 
     return Object.keys(record).length;
+  }
+
+  private mergeTerms(schedules: CourseFetchResult["schedule"][]) {
+    const terms = new Map<string, unknown>();
+    const canonicalIds = new Map<string, string>();
+    const aliases = new Map<string, string>();
+
+    for (const schedule of schedules) {
+      for (const term of schedule.semesters || []) {
+        const record = this.asRecord(term);
+        const id = record.id;
+
+        if (typeof id !== "string" || !id.trim()) {
+          continue;
+        }
+
+        const key = this.getTermKey(term);
+        const existingId = canonicalIds.get(key);
+
+        if (existingId) {
+          terms.set(existingId, this.mergeTermRecords(terms.get(existingId), term));
+          aliases.set(id, existingId);
+        } else {
+          terms.set(id, term);
+          canonicalIds.set(key, id);
+          aliases.set(id, id);
+        }
+      }
+
+      if (schedule.selectedSemesterId && !aliases.has(schedule.selectedSemesterId)) {
+        const fallbackTerm = {
+          id: schedule.selectedSemesterId,
+          title: schedule.term || schedule.selectedSemesterId,
+          label: schedule.term || schedule.selectedSemesterId,
+        };
+        const key = this.getTermKey(fallbackTerm);
+        const existingId = canonicalIds.get(key);
+
+        if (existingId) {
+          terms.set(existingId, this.mergeTermRecords(terms.get(existingId), fallbackTerm));
+          aliases.set(schedule.selectedSemesterId, existingId);
+          continue;
+        }
+
+        terms.set(schedule.selectedSemesterId, {
+          id: schedule.selectedSemesterId,
+          title: schedule.term || schedule.selectedSemesterId,
+          label: schedule.term || schedule.selectedSemesterId,
+        });
+        canonicalIds.set(key, schedule.selectedSemesterId);
+        aliases.set(schedule.selectedSemesterId, schedule.selectedSemesterId);
+      }
+    }
+
+    return [...terms.values()].filter((term) => this.isNotFutureAcademicYear(term)).sort(
+      (left, right) => this.getTermSortKey(right) - this.getTermSortKey(left),
+    );
+  }
+
+  private mergeTermRecords(existing: unknown, next: unknown) {
+    const existingRecord = this.asRecord(existing);
+    const nextRecord = this.asRecord(next);
+
+    return {
+      ...existingRecord,
+      selected: Boolean(existingRecord.selected || nextRecord.selected),
+    };
+  }
+
+  private getTermKey(value: unknown) {
+    const record = this.asRecord(value);
+    const text = String(record.label ?? record.title ?? record.name ?? record.id ?? "")
+      .replace(/\s+/g, "")
+      .trim();
+    const yearMatch = text.match(/(20\d{2})[-~—至]?(20\d{2})/);
+
+    if (!yearMatch) {
+      return text;
+    }
+
+    const secondSemester =
+      text.includes("第二学期") ||
+      text.includes("下学期") ||
+      /第?[二2]学期/.test(text) ||
+      /[.-]?2$/.test(text);
+
+    return `${yearMatch[1]}-${yearMatch[2]}-${secondSemester ? "2" : "1"}`;
+  }
+
+  private getTermSortKey(value: unknown) {
+    const match = this.getTermKey(value).match(/^(20\d{2})-(20\d{2})-([12])$/);
+
+    return match ? Number(match[1]) * 10 + Number(match[3]) : Number.NEGATIVE_INFINITY;
+  }
+
+  private isNotFutureAcademicYear(value: unknown) {
+    const match = this.getTermKey(value).match(/^(20\d{2})-(20\d{2})-([12])$/);
+
+    if (!match) {
+      return true;
+    }
+
+    return Number(match[1]) <= this.getCurrentAcademicStartYear();
+  }
+
+  private getCurrentAcademicStartYear(baseDate = new Date()) {
+    const year = baseDate.getFullYear();
+    const month = baseDate.getMonth();
+
+    return month >= 8 ? year : year - 1;
   }
 
   private normalizeCourse(course: ProviderCourse, index: number) {

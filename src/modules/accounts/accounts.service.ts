@@ -73,6 +73,7 @@ export class StudentAccountsService {
     providerId: string
     displayName: string | null
     status: StudentAccountSummary['status']
+    credentialSaveMode: StudentAccountSummary['credentialSaveMode']
     sessionReusable: boolean
     sessionRefreshable: boolean
     sessionExpireAt: Date | null
@@ -90,6 +91,7 @@ export class StudentAccountsService {
       providerId: account.providerId,
       displayName: account.displayName ?? undefined,
       status: account.status,
+      credentialSaveMode: account.credentialSaveMode,
       sessionReusable: account.sessionReusable,
       sessionRefreshable: account.sessionRefreshable,
       sessionExpireAt: account.sessionExpireAt?.toISOString(),

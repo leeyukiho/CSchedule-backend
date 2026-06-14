@@ -2,6 +2,7 @@ import {
   DataAccessMode,
   DataTarget,
   LoginMode,
+  CredentialSaveCapability,
   ProviderCapabilities,
   ProviderDataAccess,
   ProviderStatus,
@@ -29,6 +30,7 @@ export interface SchoolListItem {
   loginMode?: LoginMode
   dataAccess?: ProviderDataAccess
   capabilities: ProviderCapabilities
+  credentialSave?: CredentialSaveCapability
   message?: string
 }
 
@@ -63,6 +65,7 @@ export interface LoginContextResponse {
     requiredFetchTargets?: DataTarget[]
     closeAfterCacheWritten: boolean
   }
+  credentialSave?: CredentialSaveCapability
   expireAt: string
 }
 

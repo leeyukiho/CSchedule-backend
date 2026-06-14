@@ -140,6 +140,20 @@ export interface CredentialPolicy {
   adminNote?: string
 }
 
+export type AutoSyncCapability =
+  | 'manual_only'
+  | 'password_login'
+  | 'password_login_may_need_verification'
+
+export interface CredentialSaveCapability {
+  passwordVaultAllowed: boolean
+  autoSync: AutoSyncCapability
+  scheduledSyncSupported?: boolean
+  title?: string
+  notice: string
+  consentLabel: string
+}
+
 export interface LoginField {
   name: string
   label: string
@@ -223,6 +237,7 @@ export interface SchoolProviderMeta {
   eduSystemType?: EduSystemType
   capabilities: ProviderCapabilities
   auth?: AuthCapability
+  credentialSave?: CredentialSaveCapability
   featureDisplay?: FeatureDisplayMap
   status?: ProviderStatus
   verifiedAt?: string
@@ -294,6 +309,7 @@ export interface ProviderSchedule {
 
 export interface CourseFetchResult {
   schedule: ProviderSchedule
+  schedules?: ProviderSchedule[]
   profile?: ProviderProfile | null
   features?: Partial<Record<Exclude<DataTarget, 'course'>, unknown>>
 }
@@ -303,6 +319,7 @@ export interface CourseConnector {
     username: string
     password: string
     semesterId?: string
+    allSemesters?: boolean
     providerConfig?: Record<string, unknown>
   }): Promise<CourseFetchResult>
 }
@@ -311,6 +328,7 @@ export interface FeatureFetchInput {
   username: string
   password: string
   semesterId?: string
+  allSemesters?: boolean
   providerConfig?: Record<string, unknown>
 }
 

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common'
 
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { ProviderRegistryService } from '../providers/provider-registry.service'
 import {
   EMPTY_CAPABILITIES,
   EMPTY_DATA_ACCESS,
@@ -8,11 +9,17 @@ import {
   SchoolCatalogSeed,
   SchoolListResponse,
 } from './schools.types'
-import { ProviderAuthConfig } from '../providers/provider.types'
+import {
+  CredentialSaveCapability,
+  ProviderAuthConfig,
+} from '../providers/provider.types'
 
 @Injectable()
 export class SchoolsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly providers: ProviderRegistryService,
+  ) {}
 
   async listSchools(
     keyword?: string,
@@ -69,6 +76,10 @@ export class SchoolsService {
         loginMode: school.loginMode ?? undefined,
         dataAccess: this.asDataAccess(school.dataAccess),
         capabilities: this.asCapabilities(school.capabilities),
+        credentialSave: this.getCredentialSaveCapability(
+          school.providerId,
+          school.config,
+        ),
         message: this.getStatusMessage(school.enabled, school.status),
       })),
       total,
@@ -82,6 +93,10 @@ export class SchoolsService {
     const school = await this.findSchool(schoolId)
     const loginMode = school.loginMode ?? 'direct_password'
     const authConfig = this.getAuthConfig(school.config)
+    const credentialSave = this.getCredentialSaveCapability(
+      school.providerId,
+      school.config,
+    )
     const expireAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
 
     if (loginMode === 'cas_webview' || loginMode === 'oauth_webview') {
@@ -99,6 +114,7 @@ export class SchoolsService {
           requiredFetchTargets: webview?.requiredFetchTargets || ['course'],
           closeAfterCacheWritten: webview?.closeAfterCacheWritten ?? true,
         },
+        credentialSave,
         expireAt,
       }
     }
@@ -155,6 +171,7 @@ export class SchoolsService {
               refreshable: authConfig?.captcha?.refreshable ?? true,
             }
           : undefined,
+      credentialSave,
       expireAt,
     }
   }
@@ -255,6 +272,71 @@ export class SchoolsService {
     }
 
     return auth as ProviderAuthConfig
+  }
+
+  private getCredentialSaveCapability(
+    providerId: string | null | undefined,
+    config: unknown,
+  ): CredentialSaveCapability | undefined {
+    if (providerId) {
+      try {
+        const providerCapability =
+          this.providers.getProvider(providerId).meta.credentialSave
+
+        if (providerCapability) {
+          return providerCapability
+        }
+      } catch {
+        // Provider metadata is optional; fall through to school config.
+      }
+    }
+
+    const root = this.asRecord(config)
+    const provider = this.asRecord(root.provider)
+    const capability = root.credentialSave ?? provider.credentialSave
+
+    if (!capability || typeof capability !== 'object' || Array.isArray(capability)) {
+      return undefined
+    }
+
+    return this.asCredentialSaveCapability(capability)
+  }
+
+  private asCredentialSaveCapability(
+    value: unknown,
+  ): CredentialSaveCapability | undefined {
+    const source = this.asRecord(value)
+
+    if (
+      typeof source.passwordVaultAllowed !== 'boolean' ||
+      typeof source.autoSync !== 'string' ||
+      typeof source.notice !== 'string' ||
+      typeof source.consentLabel !== 'string'
+    ) {
+      return undefined
+    }
+
+    if (
+      ![
+        'manual_only',
+        'password_login',
+        'password_login_may_need_verification',
+      ].includes(source.autoSync)
+    ) {
+      return undefined
+    }
+
+    return {
+      passwordVaultAllowed: source.passwordVaultAllowed,
+      autoSync: source.autoSync as CredentialSaveCapability['autoSync'],
+      scheduledSyncSupported:
+        typeof source.scheduledSyncSupported === 'boolean'
+          ? source.scheduledSyncSupported
+          : undefined,
+      title: typeof source.title === 'string' ? source.title : undefined,
+      notice: source.notice,
+      consentLabel: source.consentLabel,
+    }
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

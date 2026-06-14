@@ -6,6 +6,7 @@ export interface StudentAccountSummary {
   providerId: string
   displayName?: string
   status: AccountStatus
+  credentialSaveMode?: 'none' | 'session_only' | 'session_refresh' | 'password_vault'
   sessionReusable: boolean
   sessionRefreshable: boolean
   sessionExpireAt?: string

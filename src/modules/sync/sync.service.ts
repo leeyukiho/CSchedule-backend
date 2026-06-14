@@ -4,6 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 
+import { CredentialVaultService } from '../../common/crypto/credential-vault.service'
+import { EncryptedPayload } from '../../common/crypto/encrypted-payload.type'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { DataTarget } from '../providers/provider.types'
 import { CourseSyncService } from './course-sync.service'
@@ -27,6 +29,7 @@ export class SyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly courseSync: CourseSyncService,
+    private readonly credentialVault: CredentialVaultService,
   ) {}
 
   async createManualSync(
@@ -70,7 +73,9 @@ export class SyncService {
       }
     }
 
-    if (!input.username || !input.password) {
+    const credentials = this.resolveCredentials(account.authState, input)
+
+    if (!credentials.username || !credentials.password) {
       const record = await this.prisma.syncRecord.create({
         data: {
           accountId: account.id,
@@ -107,16 +112,22 @@ export class SyncService {
       if (target === 'course') {
         await this.courseSync.fetchAndCacheByCredentials({
           accountId,
-          username: input.username,
-          password: input.password,
+          username: credentials.username,
+          password: credentials.password,
           semesterId: input.semesterId,
+          allSemesters: true,
+          credentialSaveMode:
+            account.credentialSaveMode === 'password_vault'
+              ? 'password_vault'
+              : 'none',
+          authStatePatch: this.getCredentialAuthStatePatch(account.authState),
         })
       } else {
         await this.courseSync.fetchAndCacheFeatureByCredentials({
           accountId,
           target,
-          username: input.username,
-          password: input.password,
+          username: credentials.username,
+          password: credentials.password,
           semesterId: input.semesterId,
         })
       }
@@ -165,5 +176,56 @@ export class SyncService {
       target: record.target,
       status: record.status,
     }
+  }
+
+  private resolveCredentials(
+    authState: unknown,
+    input: { username?: string; password?: string },
+  ) {
+    if (input.username && input.password) {
+      return {
+        username: input.username,
+        password: input.password,
+      }
+    }
+
+    const vault = this.asRecord(this.asRecord(authState).credentialVault)
+    const usernamePayload = this.asEncryptedPayload(vault.username)
+    const passwordPayload = this.asEncryptedPayload(vault.password)
+
+    if (!usernamePayload || !passwordPayload) {
+      return { username: '', password: '' }
+    }
+
+    return {
+      username: this.credentialVault.decrypt(usernamePayload),
+      password: this.credentialVault.decrypt(passwordPayload),
+    }
+  }
+
+  private getCredentialAuthStatePatch(authState: unknown) {
+    const vault = this.asRecord(this.asRecord(authState).credentialVault)
+
+    return Object.keys(vault).length > 0 ? { credentialVault: vault } : undefined
+  }
+
+  private asEncryptedPayload(value: unknown): EncryptedPayload | null {
+    const payload = this.asRecord(value)
+
+    if (
+      typeof payload.algorithm === 'string' &&
+      typeof payload.ciphertext === 'string' &&
+      typeof payload.iv === 'string'
+    ) {
+      return payload as unknown as EncryptedPayload
+    }
+
+    return null
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
   }
 }

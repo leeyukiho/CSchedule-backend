@@ -6,11 +6,18 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 
+import { CredentialVaultService } from "../../common/crypto/credential-vault.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { StudentIdentityService } from "../accounts/student-identity.service";
+import { ProviderRegistryService } from "../providers/provider-registry.service";
 import { CourseSyncService } from "../sync/course-sync.service";
 import { LoginSubmitRequest, LoginSubmitResponse } from "./auth.types";
+
+const INVALID_CREDENTIAL_PATTERN =
+  /\u5b66\u53f7\u6216\u5bc6\u7801\u9519\u8bef|\u7528\u6237\u540d\u6216\u5bc6\u7801\u9519\u8bef|\u8d26\u53f7\u6216\u5bc6\u7801\u9519\u8bef|\u7528\u6237\u4e0d\u5b58\u5728|invalid credentials?/i;
+const LOGIN_SYNC_MAX_ATTEMPTS = 3;
 
 @Injectable()
 export class AuthService {
@@ -18,6 +25,8 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly courseSync: CourseSyncService,
     private readonly studentIdentity: StudentIdentityService,
+    private readonly providers: ProviderRegistryService,
+    private readonly credentialVault: CredentialVaultService,
   ) {}
 
   async submitLogin(
@@ -47,20 +56,33 @@ export class AuthService {
     }
 
     const providerId = existingSchool.providerId ?? schoolId;
+    const credentialSaveMode = this.getCredentialSaveMode(providerId, input);
+    const authStatePatch =
+      credentialSaveMode === "password_vault" && input.username && input.password
+        ? {
+            credentialVault: {
+              username: this.credentialVault.encrypt(input.username),
+              password: this.credentialVault.encrypt(input.password),
+              savedAt: new Date().toISOString(),
+              providerId,
+            },
+          }
+        : undefined;
     const account = await this.studentIdentity.findOrCreateAccount({
       schoolId,
       providerId,
       studentNo: input.username,
       data: {
         status: "need_login",
-        authState: {
+        authState: this.toJson({
           contextId: input.contextId,
           loginMode,
-        },
+          ...(authStatePatch || {}),
+        }),
         cacheState: {},
         sessionReusable: false,
         sessionRefreshable: false,
-        credentialSaveMode: "none",
+        credentialSaveMode,
         lastLoginAt: new Date(),
       },
     });
@@ -75,35 +97,60 @@ export class AuthService {
     }
 
     try {
-      const cache = await this.courseSync.fetchAndCacheByCredentials({
-        accountId: account.id,
-        username: input.username || "",
-        password: input.password || "",
-        semesterId:
-          typeof input.extra?.semesterId === "string"
-            ? input.extra.semesterId
-            : undefined,
-      });
+      let latestError: unknown;
 
-      return {
-        accountId: cache.accountId,
-        status: "cached",
-        sessionReusable: false,
-        requiredFetchTargets: [],
-        cacheId: cache.cacheId,
-        parsedCount: cache.parsedCount,
-      };
+      for (let attempt = 1; attempt <= LOGIN_SYNC_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          const cache = await this.courseSync.fetchAndCacheByCredentials({
+            accountId: account.id,
+            username: input.username || "",
+            password: input.password || "",
+            semesterId:
+              typeof input.extra?.semesterId === "string"
+                ? input.extra.semesterId
+                : undefined,
+            allSemesters: true,
+            credentialSaveMode,
+            authStatePatch,
+          });
+
+          return {
+            accountId: cache.accountId,
+            status: "cached",
+            sessionReusable: false,
+            requiredFetchTargets: [],
+            cacheId: cache.cacheId,
+            parsedCount: cache.parsedCount,
+          };
+        } catch (error) {
+          latestError = error;
+
+          if (this.isInvalidCredentialError(error)) {
+            throw error;
+          }
+
+          if (attempt < LOGIN_SYNC_MAX_ATTEMPTS) {
+            await this.sleep(700);
+          }
+        }
+      }
+
+      throw latestError;
     } catch (error) {
+      const authErrorCode = this.isInvalidCredentialError(error)
+        ? "INVALID_CREDENTIAL"
+        : "SYNC_FAILED";
+
       await this.prisma.studentAccount.update({
         where: { id: account.id },
         data: {
           status: "need_login",
-          lastAuthErrorCode: "INVALID_CREDENTIAL",
+          lastAuthErrorCode: authErrorCode,
           lastAuthErrorAt: new Date(),
         },
       });
 
-      throw this.toLoginException(error);
+      throw this.toSyncException(error);
     }
   }
 
@@ -177,6 +224,59 @@ export class AuthService {
         lastLoginAt: new Date(),
       },
     });
+  }
+
+  private toSyncException(error: unknown) {
+    if (error instanceof HttpException) {
+      return error;
+    }
+
+    const message = error instanceof Error ? error.message : "";
+
+    if (this.isInvalidCredentialError(error)) {
+      return new UnauthorizedException(
+        message || "\u5b66\u53f7\u6216\u5bc6\u7801\u9519\u8bef",
+      );
+    }
+
+    return new BadGatewayException(
+      message
+        ? `\u6559\u52a1\u7cfb\u7edf\u6570\u636e\u540c\u6b65\u5931\u8d25\uff1a${message}`
+        : "\u6559\u52a1\u7cfb\u7edf\u6682\u65f6\u65e0\u6cd5\u8bbf\u95ee",
+    );
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private isInvalidCredentialError(error: unknown) {
+    const message = error instanceof Error ? error.message : "";
+
+    return INVALID_CREDENTIAL_PATTERN.test(message);
+  }
+
+  private getCredentialSaveMode(
+    providerId: string,
+    input: LoginSubmitRequest,
+  ): "none" | "password_vault" {
+    if (input.credentialSaveMode !== "password_vault") {
+      return "none";
+    }
+
+    const provider = this.providers.getProvider(providerId);
+
+    if (!provider.meta.credentialSave?.passwordVaultAllowed) {
+      throw new BadRequestException(
+        "CREDENTIAL_SAVE_UNSUPPORTED: this school does not support saved credentials",
+      );
+    }
+
+    return "password_vault";
+  }
+
+  private toJson(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
   }
 
   private toLoginException(error: unknown) {

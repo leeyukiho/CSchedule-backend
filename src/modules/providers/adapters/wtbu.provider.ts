@@ -7,6 +7,7 @@ import {
   FeatureFetchResult,
   ProviderCourse,
   ProviderProfile,
+  ProviderSchedule,
   ProviderScoreResult,
   ProfileConnector,
   ScoreConnector,
@@ -28,6 +29,11 @@ const DEFAULT_CONFIG = {
   scheduleIndexPath: '/eams/courseTableForStd.action',
   scheduleTablePath: '/eams/courseTableForStd!courseTable.action',
 }
+const LOGIN_MAX_ATTEMPTS = 2
+const SCHEDULE_FETCH_MAX_ATTEMPTS = 3
+const WTBU_HISTORY_ACADEMIC_YEARS = 4
+const TERM_ID_PATTERN = /^(20\d{2})-?(20\d{2})-?([12])$/
+const WTBU_NUMERIC_TERM_ID_PATTERN = /^\d{2,3}$/
 
 function getConfig(providerConfig?: Record<string, unknown>) {
   return {
@@ -287,6 +293,73 @@ function normalizeEduHref(href: unknown, baseUrl = DEFAULT_CONFIG.baseUrl) {
   }
 }
 
+function isLoginPage(html: unknown) {
+  const text = String(html || '')
+
+  return text.includes('loginForm') || text.includes('请输入用户名')
+}
+
+function hasInvalidCredentialMessage(html: unknown) {
+  const $ = cheerio.load(String(html || ''))
+  const text = cleanText(
+    [
+      $('.error, .errors, .alert, .alert-danger, .login-error, #error, #errorMsg, .errorMessage')
+        .text(),
+      $('[class*="error"], [id*="error"], [class*="Error"], [id*="Error"]').text(),
+    ].join(' '),
+  )
+
+  return (
+    text.includes('密码错误') ||
+    text.includes('用户名或密码') ||
+    text.includes('账号或密码错误') ||
+    text.includes('登录失败') ||
+    text.includes('用户不存在')
+  )
+}
+
+async function fetchLoggedInHome(
+  client: ReturnType<typeof createProviderHttpClient>,
+  config: ReturnType<typeof getConfig>,
+) {
+  const [homePage, schedulePage] = await Promise.all([
+    client.get(config.homePath).catch(() => null),
+    client.get(config.scheduleIndexPath).catch(() => null),
+  ])
+  const homeHtml = String(homePage?.data || '')
+  const scheduleHtml = String(schedulePage?.data || '')
+
+  if (
+    scheduleHtml.includes('courseTableForStd') ||
+    scheduleHtml.includes('semester.id') ||
+    scheduleHtml.includes('bg.form.addInput')
+  ) {
+    return homeHtml || scheduleHtml
+  }
+
+  if (homeHtml && !isLoginPage(homeHtml)) {
+    return homeHtml
+  }
+
+  return ''
+}
+
+async function followLoginRedirect(
+  client: ReturnType<typeof createProviderHttpClient>,
+  config: ReturnType<typeof getConfig>,
+  location: unknown,
+) {
+  const path = normalizeEduHref(location, config.baseUrl)
+
+  if (!path) {
+    return
+  }
+
+  await client.get(path, {
+    validateStatus: (status) => status >= 200 && status < 400,
+  })
+}
+
 function findEduLinksByKeywords(
   html: unknown,
   keywords: string[],
@@ -336,11 +409,241 @@ function getCurrentSemesterId(indexHtml: unknown) {
     .first()
     .attr('value')
   const inputValue = $('input[name="semester.id"]').first().attr('value')
+  const calendarValueMatch = html.match(/semesterCalendar\(\{[^}]*value:"([^"]+)"/i)
   const inputMatch =
     html.match(/name=["']semester\.id["'][^>]*value=["']([^"']*)["']/i) ||
     html.match(/value=["']([^"']*)["'][^>]*name=["']semester\.id["']/i)
 
-  return selectedOption || inputValue || (inputMatch ? inputMatch[1] : '')
+  return (
+    selectedOption ||
+    inputValue ||
+    (calendarValueMatch ? calendarValueMatch[1] : '') ||
+    (inputMatch ? inputMatch[1] : '')
+  )
+}
+
+function createFallbackSemesterId(term: unknown) {
+  const text = cleanText(term)
+  const yearMatch = text.match(/(20\d{2})\s*[-~—至]\s*(20\d{2})/)
+  const secondSemester =
+    text.includes('第二学期') ||
+    text.includes('下学期') ||
+    /第?\s*[二2]\s*学期/.test(text)
+
+  if (yearMatch) {
+    return `${yearMatch[1]}-${yearMatch[2]}-${secondSemester ? '2' : '1'}`
+  }
+
+  return text ? `term-${crypto.createHash('sha1').update(text).digest('hex').slice(0, 10)}` : ''
+}
+
+function buildWtbuHistorySemesters(baseDate = new Date()) {
+  const year = baseDate.getFullYear()
+  const month = baseDate.getMonth()
+  const currentAcademicStartYear = month >= 8 ? year : year - 1
+  const semesters: Array<{ id: string; label: string; synthetic: boolean }> = []
+
+  for (
+    let academicStartYear = currentAcademicStartYear;
+    academicStartYear > currentAcademicStartYear - WTBU_HISTORY_ACADEMIC_YEARS;
+    academicStartYear -= 1
+  ) {
+    semesters.push({
+      id: `${academicStartYear}${academicStartYear + 1}2`,
+      label: `${academicStartYear}-${academicStartYear + 1}学年第二学期`,
+      synthetic: true,
+    })
+    semesters.push({
+      id: `${academicStartYear}${academicStartYear + 1}1`,
+      label: `${academicStartYear}-${academicStartYear + 1}学年第一学期`,
+      synthetic: true,
+    })
+  }
+
+  return semesters
+}
+
+function parseWtbuNumericTermId(value: unknown) {
+  const id = String(value || '').trim()
+
+  if (!WTBU_NUMERIC_TERM_ID_PATTERN.test(id)) {
+    return null
+  }
+
+  const code = Number(id)
+
+  if (!Number.isFinite(code) || code < 22 || (code - 2) % 20 !== 0) {
+    return null
+  }
+
+  const termIndex = (code - 2) / 20
+
+  if (!Number.isInteger(termIndex) || termIndex < 1) {
+    return null
+  }
+
+  const semester = termIndex % 2 === 1 ? 1 : 2
+  const academicStartYear = 2020 + Math.floor((termIndex - 1) / 2)
+
+  return {
+    code,
+    termIndex,
+    semester,
+    academicStartYear,
+  }
+}
+
+function buildWtbuNumericTermId(academicStartYear: number, semester: 1 | 2) {
+  const termIndex =
+    (academicStartYear - 2020) * 2 + (semester === 1 ? 1 : 2)
+
+  if (!Number.isFinite(termIndex) || termIndex < 1) {
+    return `${academicStartYear}-${academicStartYear + 1}-${semester}`
+  }
+
+  return String(termIndex * 20 + 2)
+}
+
+function buildAcademicTermLabel(academicStartYear: number, semester: 1 | 2) {
+  const semesterText =
+    semester === 1
+      ? '\u7b2c\u4e00\u5b66\u671f'
+      : '\u7b2c\u4e8c\u5b66\u671f'
+
+  return `${academicStartYear}-${academicStartYear + 1}\u5b66\u5e74${semesterText}`
+}
+
+function buildWtbuStudentHistorySemesters(input: {
+  currentTermId: string
+  baseDate?: Date
+}) {
+  const currentAcademicStartYear = getCurrentAcademicStartYear(input.baseDate)
+  const currentNumericTerm = parseWtbuNumericTermId(input.currentTermId)
+  const firstAcademicStartYear = Math.max(
+    currentAcademicStartYear - WTBU_HISTORY_ACADEMIC_YEARS + 1,
+    2020,
+  )
+  const semesters: Array<{ id: string; label: string; synthetic: boolean }> = []
+
+  for (
+    let academicStartYear = firstAcademicStartYear;
+    academicStartYear <= currentAcademicStartYear;
+    academicStartYear += 1
+  ) {
+    semesters.push({
+      id:
+        currentNumericTerm &&
+        currentNumericTerm.academicStartYear === academicStartYear &&
+        currentNumericTerm.semester === 1
+          ? input.currentTermId
+          : buildWtbuNumericTermId(academicStartYear, 1),
+      label: buildAcademicTermLabel(academicStartYear, 1),
+      synthetic: true,
+    })
+    semesters.push({
+      id:
+        currentNumericTerm &&
+        currentNumericTerm.academicStartYear === academicStartYear &&
+        currentNumericTerm.semester === 2
+          ? input.currentTermId
+          : buildWtbuNumericTermId(academicStartYear, 2),
+      label: buildAcademicTermLabel(academicStartYear, 2),
+      synthetic: true,
+    })
+  }
+
+  return semesters
+}
+
+function toCourseSemesterOption(id: string, label?: string, synthetic = false) {
+  const text = cleanText(label)
+
+  return {
+    id,
+    title: text || `学期 ${id}`,
+    label: text || `学期 ${id}`,
+    selected: false,
+    synthetic,
+  }
+}
+
+function normalizeSemesterLabel(value: unknown) {
+  const text = cleanText(value).replace(/\s+/g, '')
+  const yearMatch = text.match(/(20\d{2})[-~—至](20\d{2})/)
+  const secondSemester =
+    text.includes('第二学期') ||
+    text.includes('下学期') ||
+    /第?[二2]学期/.test(text)
+
+  return yearMatch
+    ? `${yearMatch[1]}-${yearMatch[2]}-${secondSemester ? '2' : '1'}`
+    : text
+}
+
+function getSemesterSortKey(value: unknown) {
+  const normalized = normalizeSemesterKey(value)
+  const match = normalized.match(TERM_ID_PATTERN)
+
+  if (!match) {
+    return Number.NEGATIVE_INFINITY
+  }
+
+  return Number(match[1]) * 10 + Number(match[3])
+}
+
+function normalizeSemesterKey(value: unknown) {
+  const text = cleanText(value).replace(/\s+/g, '')
+  const numericTerm = parseWtbuNumericTermId(text)
+
+  if (numericTerm) {
+    return `${numericTerm.academicStartYear}-${numericTerm.academicStartYear + 1}-${numericTerm.semester}`
+  }
+
+  const yearMatch = text.match(/(20\d{2})[-~—至]?(20\d{2})/)
+
+  if (!yearMatch) {
+    return text
+  }
+
+  const secondSemester =
+    text.includes('第二学期') ||
+    text.includes('下学期') ||
+    /第?[二2]学期/.test(text) ||
+    /[.-]?2$/.test(text)
+
+  return `${yearMatch[1]}-${yearMatch[2]}-${secondSemester ? '2' : '1'}`
+}
+
+function sortSemestersForHistoryFetch(
+  semesters: Array<{
+    id: string
+    title: string
+    label: string
+    selected?: boolean
+    synthetic?: boolean
+  }>,
+  selectedSemesterId?: string,
+) {
+  return [...semesters]
+    .filter((semester) => semester.id !== selectedSemesterId)
+    .sort((left, right) => {
+      const sortDiff =
+        getSemesterSortKey(left.label || left.title || left.id) -
+        getSemesterSortKey(right.label || right.title || right.id)
+
+      if (sortDiff !== 0) {
+        return sortDiff
+      }
+
+      return left.id.localeCompare(right.id)
+    })
+}
+
+function isExpectedScheduleTerm(schedule: ProviderSchedule, expectedLabel: unknown) {
+  const expected = normalizeSemesterLabel(expectedLabel)
+  const actual = normalizeSemesterLabel(schedule.term)
+
+  return !expected || !actual || expected === actual
 }
 
 function parseSemesters(indexHtml: unknown) {
@@ -661,53 +964,60 @@ async function loginToEduSystem(
   username: string,
   password: string,
 ) {
-  const loginPage = await client.get(config.homePath)
-  const loginHtml = String(loginPage.data || '')
-  const saltMatch = loginHtml.match(
-    /CryptoJS\.SHA1\('([^']*)'\s*\+\s*form\['password'\]\.value\)/,
-  )
+  for (let attempt = 1; attempt <= LOGIN_MAX_ATTEMPTS; attempt += 1) {
+    const loginPage = await client.get(config.homePath)
+    const loginHtml = String(loginPage.data || '')
+    const saltMatch = loginHtml.match(
+      /CryptoJS\.SHA1\('([^']*)'\s*\+\s*form\['password'\]\.value\)/,
+    )
 
-  if (!saltMatch) {
-    throw new Error('无法读取教务系统登录参数')
+    if (!saltMatch && !isLoginPage(loginHtml)) {
+      return loginHtml
+    }
+
+    if (!saltMatch) {
+      throw new Error('无法读取教务系统登录参数')
+    }
+
+    const hashedPassword = crypto
+      .createHash('sha1')
+      .update(`${saltMatch[1]}${password}`, 'utf8')
+      .digest('hex')
+    const loginPayload = new URLSearchParams({
+      username: username.trim(),
+      password: hashedPassword,
+      encodedPassword: '',
+      session_locale: 'zh_CN',
+    })
+    const loginResponse = await client.post(
+      config.loginPath,
+      loginPayload.toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Referer: `${config.baseUrl}${config.homePath}`,
+          Origin: config.baseUrl,
+        },
+        maxRedirects: 0,
+        validateStatus: (status) => status >= 200 && status < 400,
+      },
+    )
+    const loginBody = String(loginResponse.data || '')
+
+    if (hasInvalidCredentialMessage(loginBody)) {
+      throw new Error('学号或密码错误')
+    }
+
+    await followLoginRedirect(client, config, loginResponse.headers.location)
+
+    const homeHtml = await fetchLoggedInHome(client, config)
+
+    if (homeHtml) {
+      return homeHtml
+    }
   }
 
-  const hashedPassword = crypto
-    .createHash('sha1')
-    .update(`${saltMatch[1]}${password}`, 'utf8')
-    .digest('hex')
-  const loginPayload = new URLSearchParams({
-    username: username.trim(),
-    password: hashedPassword,
-    encodedPassword: '',
-    session_locale: 'zh_CN',
-  })
-  const loginResponse = await client.post(
-    config.loginPath,
-    loginPayload.toString(),
-    {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      maxRedirects: 0,
-      validateStatus: (status) => status >= 200 && status < 400,
-    },
-  )
-  const loginBody = String(loginResponse.data || '')
-
-  if (
-    loginBody.includes('密码错误') ||
-    loginBody.includes('登录失败') ||
-    (loginBody.includes('用户名') && loginBody.includes('密码'))
-  ) {
-    throw new Error('学号或密码错误')
-  }
-
-  const homePage = await client.get(config.homePath)
-  const homeHtml = String(homePage.data || '')
-
-  if (homeHtml.includes('loginForm') || homeHtml.includes('请输入用户名')) {
-    throw new Error('学号或密码错误')
-  }
-
-  return homeHtml
+  throw new Error('教务系统登录后未返回有效会话')
 }
 
 async function fetchEduPath(
@@ -726,7 +1036,7 @@ async function fetchEduPath(
   })
   const html = String(response.data || '')
 
-  if (!html || html.includes('loginForm') || html.includes('请输入用户名')) {
+  if (!html || isLoginPage(html)) {
     return ''
   }
 
@@ -1282,6 +1592,115 @@ function parseGradeSemesters(gradesHtml: unknown) {
   return semesters
 }
 
+async function fetchGradeSemesterOptions(
+  client: ReturnType<typeof createProviderHttpClient>,
+  config: ReturnType<typeof getConfig>,
+  homeHtml: unknown,
+) {
+  const gradesHtml = await fetchEduPageByKeywords(
+    client,
+    homeHtml,
+    ['我的成绩', '成绩查询', '成绩'],
+    [
+      '/eams/teach/grade/course/person.action',
+      '/eams/teach/grade/course/person!search.action?semesterId=&projectType=',
+      '/eams/teach/grade/course/person!historyCourseGrade.action?projectType=MAJOR',
+    ],
+    config.baseUrl,
+  )
+
+  return parseGradeSemesters(gradesHtml).map((semester) =>
+    toCourseSemesterOption(semester.id, semester.label),
+  )
+}
+
+function mergeSemesterOptions(
+  ...groups: Array<Array<{ id: string; title: string; label: string; selected?: boolean; synthetic?: boolean }>>
+) {
+  const semesters = new Map<string, { id: string; title: string; label: string; selected?: boolean; synthetic?: boolean }>()
+  const keyToId = new Map<string, string>()
+
+  for (const group of groups) {
+    for (const semester of group) {
+      const id = String(semester.id || '').trim()
+      const key = normalizeSemesterKey(semester.label || semester.title || id)
+
+      if (!id) {
+        continue
+      }
+
+      const existingId = keyToId.get(key)
+
+      if (existingId) {
+        const existing = semesters.get(existingId)
+
+        if (existing) {
+          const nextSemester = { ...semester, id }
+          const preferred = getSemesterPriority(nextSemester) > getSemesterPriority(existing)
+            ? nextSemester
+            : existing
+
+          if (preferred.id !== existingId) {
+            semesters.delete(existingId)
+            keyToId.set(key, preferred.id)
+          }
+
+          semesters.set(preferred.id, {
+            ...preferred,
+            selected: Boolean(existing.selected || semester.selected),
+            synthetic: Boolean(existing.synthetic && semester.synthetic),
+          })
+        }
+
+        continue
+      }
+
+      if (!semesters.has(id)) {
+        semesters.set(id, { ...semester, id })
+        keyToId.set(key, id)
+      }
+    }
+  }
+
+  return [...semesters.values()].filter(isNotFutureAcademicYear).sort(
+    (left, right) =>
+      getSemesterSortKey(right.label || right.title || right.id) -
+      getSemesterSortKey(left.label || left.title || left.id),
+  )
+}
+
+function getSemesterPriority(semester: { id: string; synthetic?: boolean }) {
+  const id = String(semester.id || '')
+
+  if (semester.synthetic) {
+    return 0
+  }
+
+  if (/^20\d{2}-20\d{2}-[12]$/.test(id) || /^20\d{6}[12]$/.test(id)) {
+    return 1
+  }
+
+  return 2
+}
+
+function isNotFutureAcademicYear(semester: { id: string; title: string; label: string }) {
+  const normalized = normalizeSemesterKey(semester.label || semester.title || semester.id)
+  const match = normalized.match(TERM_ID_PATTERN)
+
+  if (!match) {
+    return true
+  }
+
+  return Number(match[1]) <= getCurrentAcademicStartYear()
+}
+
+function getCurrentAcademicStartYear(baseDate = new Date()) {
+  const year = baseDate.getFullYear()
+  const month = baseDate.getMonth()
+
+  return month >= 8 ? year : year - 1
+}
+
 function emptyGrades(): ProviderScoreResult {
   return {
     summary: [
@@ -1291,6 +1710,17 @@ function emptyGrades(): ProviderScoreResult {
     ],
     semesters: [],
   }
+}
+
+function emptyGradesWithWarning(error: unknown): ProviderScoreResult {
+  const result = emptyGrades()
+
+  console.warn(
+    'fetch grades failed during course login',
+    error instanceof Error ? error.message : '',
+  )
+
+  return result
 }
 
 async function fetchGrades(
@@ -1365,8 +1795,21 @@ async function fetchScheduleWithClient(
   config: ReturnType<typeof getConfig>,
   input: { semesterId?: string },
 ) {
-  const indexResponse = await client.get(config.scheduleIndexPath)
-  const indexHtml = String(indexResponse.data || '')
+  let indexHtml = ''
+
+  for (let attempt = 1; attempt <= SCHEDULE_FETCH_MAX_ATTEMPTS; attempt += 1) {
+    const indexResponse = await client.get(config.scheduleIndexPath)
+    indexHtml = String(indexResponse.data || '')
+
+    if (
+      indexHtml.includes('bg.form.addInput') ||
+      indexHtml.includes('semester.id') ||
+      indexHtml.includes('courseTableForStd')
+    ) {
+      break
+    }
+  }
+
   const idsMatch = indexHtml.match(
     /bg\.form\.addInput\(form,\s*"ids",\s*"([^"]+)"\)/,
   )
@@ -1394,14 +1837,16 @@ async function fetchScheduleWithClient(
     },
   )
   const parsedSchedule = parseSchedule(response.data)
+  const fallbackSemesterId = createFallbackSemesterId(parsedSchedule.term)
+  const normalizedSemesterId = semesterId || fallbackSemesterId
 
   if (
-    (semesterId || parsedSchedule.term) &&
-    !semesters.some((semester) => semester.id === semesterId)
+    (normalizedSemesterId || parsedSchedule.term) &&
+    !semesters.some((semester) => semester.id === normalizedSemesterId)
   ) {
     semesters = [
       {
-        id: semesterId || '',
+        id: normalizedSemesterId || '',
         title: parsedSchedule.term || '当前学期',
         label: parsedSchedule.term || '当前学期',
         selected: true,
@@ -1414,9 +1859,9 @@ async function fetchScheduleWithClient(
     ...parsedSchedule,
     semesters: semesters.map((semester) => ({
       ...semester,
-      selected: semester.id === semesterId,
+      selected: semester.id === normalizedSemesterId,
     })),
-    selectedSemesterId: semesterId,
+    selectedSemesterId: normalizedSemesterId,
   }
 }
 
@@ -1434,14 +1879,86 @@ const wtbuCourseConnector: CourseConnector = {
       input.username,
       input.password,
     )
-    const [schedule, profile, score] = await Promise.all([
+    const [schedule, profile, gradeSemesters] = await Promise.all([
       fetchScheduleWithClient(client, config, { semesterId: input.semesterId }),
       fetchProfile(client, config, homeHtml, input.username),
-      fetchGrades(client, config, homeHtml),
+      fetchGradeSemesterOptions(client, config, homeHtml).catch(() => []),
     ])
+    let schedules: CourseFetchResult['schedules'] | undefined
+
+    if (input.allSemesters) {
+      const historySemesters = buildWtbuStudentHistorySemesters({
+        currentTermId: schedule.selectedSemesterId || '',
+      })
+      const mergedSemesters = mergeSemesterOptions(
+        schedule.semesters || [],
+        gradeSemesters,
+        historySemesters.map((semester) =>
+          toCourseSemesterOption(semester.id, semester.label, semester.synthetic),
+        ),
+      )
+      const historyTargets = sortSemestersForHistoryFetch(
+        mergedSemesters,
+        schedule.selectedSemesterId,
+      )
+
+      const fetchedSchedules: Array<ProviderSchedule | null> =
+        await Promise.all(
+          historyTargets.map(async (semester) => {
+            const semesterId = semester.id
+
+            try {
+              const fetchedSchedule = await fetchScheduleWithClient(client, config, {
+                semesterId,
+              })
+
+              if (!isExpectedScheduleTerm(fetchedSchedule, semester.label)) {
+                return null
+              }
+
+              return fetchedSchedule
+            } catch {
+              return null
+            }
+          }),
+        )
+      const uniqueSchedules = new Map<string, ProviderSchedule>()
+
+      for (const fetchedSchedule of fetchedSchedules) {
+        if (!fetchedSchedule) {
+          continue
+        }
+
+        const key = normalizeSemesterKey(
+          fetchedSchedule.term || fetchedSchedule.selectedSemesterId || '',
+        )
+
+        if (!key || uniqueSchedules.has(key)) {
+          continue
+        }
+
+        uniqueSchedules.set(key, fetchedSchedule)
+      }
+
+      schedules = [
+        {
+          ...schedule,
+          semesters: mergedSemesters.map((semester) => ({
+            ...semester,
+            selected: semester.id === schedule.selectedSemesterId,
+          })),
+        },
+        ...uniqueSchedules.values(),
+      ]
+    }
+
+    const score = await fetchGrades(client, config, homeHtml).catch((error) =>
+      emptyGradesWithWarning(error),
+    )
 
     return {
       schedule,
+      schedules,
       profile,
       features: {
         score,
@@ -1514,6 +2031,15 @@ export const wtbuProvider: SchoolProvider = {
     status: 'enabled',
     verifiedAt: '2026-06-12T00:00:00.000Z',
     capabilities: { course: true, score: true, exam: true, profile: true },
+    credentialSave: {
+      passwordVaultAllowed: true,
+      autoSync: 'password_login',
+      scheduledSyncSupported: true,
+      title: '支持保存登录信息',
+      notice:
+        '保存教务账号密码后，后续可一键更新课表，无需每次重新输入。账号密码将加密保存，仅用于同步教务数据。',
+      consentLabel: '加密保存账号密码，用于一键更新课表',
+    },
     dataAccess: {
       course: ['server_session'],
       score: ['server_session'],
