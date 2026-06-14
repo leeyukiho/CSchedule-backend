@@ -3,7 +3,7 @@ import { DataAccessMode, DataTarget } from '../provider.types'
 export interface RawPayloadEnvelope {
   schoolId: string
   providerId: string
-  bindingId: string
+  accountId: string
   target: DataTarget
   accessMode: Extract<DataAccessMode, 'webview_client_fetch' | 'manual_import'>
   termId?: string

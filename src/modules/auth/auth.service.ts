@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 
 import { PrismaService } from "../../common/prisma/prisma.service";
-import { StudentIdentityService } from "../bindings/student-identity.service";
+import { StudentIdentityService } from "../accounts/student-identity.service";
 import { CourseSyncService } from "../sync/course-sync.service";
 import { LoginSubmitRequest, LoginSubmitResponse } from "./auth.types";
 
@@ -47,7 +47,7 @@ export class AuthService {
     }
 
     const providerId = existingSchool.providerId ?? schoolId;
-    const binding = await this.studentIdentity.findOrCreateBinding({
+    const account = await this.studentIdentity.findOrCreateAccount({
       schoolId,
       providerId,
       studentNo: input.username,
@@ -67,7 +67,7 @@ export class AuthService {
 
     if (loginMode === "cas_webview") {
       return {
-        bindingId: binding.id,
+        accountId: account.id,
         status: "need_webview_fetch",
         sessionReusable: false,
         requiredFetchTargets: ["course"],
@@ -76,7 +76,7 @@ export class AuthService {
 
     try {
       const cache = await this.courseSync.fetchAndCacheByCredentials({
-        bindingId: binding.id,
+        accountId: account.id,
         username: input.username || "",
         password: input.password || "",
         semesterId:
@@ -86,7 +86,7 @@ export class AuthService {
       });
 
       return {
-        bindingId: cache.bindingId,
+        accountId: cache.accountId,
         status: "cached",
         sessionReusable: false,
         requiredFetchTargets: [],
@@ -94,8 +94,8 @@ export class AuthService {
         parsedCount: cache.parsedCount,
       };
     } catch (error) {
-      await this.prisma.userSchoolBinding.update({
-        where: { id: binding.id },
+      await this.prisma.studentAccount.update({
+        where: { id: account.id },
         data: {
           status: "need_login",
           lastAuthErrorCode: "INVALID_CREDENTIAL",
@@ -109,7 +109,7 @@ export class AuthService {
 
   async importSession(
     schoolId: string,
-    input: { contextId?: string; bindingId?: string; session?: unknown },
+    input: { contextId?: string; accountId?: string; session?: unknown },
   ) {
     const school = await this.prisma.school.findUnique({
       where: { id: schoolId },
@@ -119,22 +119,22 @@ export class AuthService {
       throw new NotFoundException("School not found");
     }
 
-    const binding = input.bindingId
-      ? await this.prisma.userSchoolBinding.findUnique({
-          where: { id: input.bindingId },
+    const account = input.accountId
+      ? await this.prisma.studentAccount.findUnique({
+          where: { id: input.accountId },
         })
-      : await this.createWebviewBinding(
+      : await this.createWebviewAccount(
           schoolId,
           school.providerId ?? schoolId,
           input.contextId,
         );
 
-    if (!binding) {
-      throw new NotFoundException("Binding not found");
+    if (!account) {
+      throw new NotFoundException("Student account not found");
     }
 
-    await this.prisma.userSchoolBinding.update({
-      where: { id: binding.id },
+    await this.prisma.studentAccount.update({
+      where: { id: account.id },
       data: {
         status: "need_login",
         authState: {
@@ -149,19 +149,19 @@ export class AuthService {
 
     return {
       status: "need_webview_client_fetch",
-      bindingId: binding.id,
+      accountId: account.id,
       requiredFetchTargets: ["course"],
       message:
         "Session import is not available for this provider. Fetch data inside WebView and upload raw-data.",
     };
   }
 
-  private async createWebviewBinding(
+  private async createWebviewAccount(
     schoolId: string,
     providerId: string,
     contextId?: string,
   ) {
-    return this.studentIdentity.findOrCreateBinding({
+    return this.studentIdentity.findOrCreateAccount({
       schoolId,
       providerId,
       data: {

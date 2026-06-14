@@ -1,14 +1,14 @@
-import { BindingStatus, FeatureDisplayConfig } from '../providers/provider.types'
+import { AccountStatus, FeatureDisplayConfig } from '../providers/provider.types'
 
-export interface BindingSessionSummary {
+export interface AccountSessionSummary {
   sessionReusable: boolean
   sessionRefreshable: boolean
   sessionExpireAt?: string
-  bindingStatus: BindingStatus
+  accountStatus: AccountStatus
 }
 
 export interface TimetableCacheResponse {
-  bindingId: string
+  accountId: string
   schoolId: string
   providerId: string
   termId?: string
@@ -17,5 +17,5 @@ export interface TimetableCacheResponse {
   sectionTimes: unknown[]
   display?: FeatureDisplayConfig
   syncedAt?: string
-  session: BindingSessionSummary
+  session: AccountSessionSummary
 }

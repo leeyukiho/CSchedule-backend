@@ -1,12 +1,11 @@
-import { BindingStatus } from '../providers/provider.types'
+import { AccountStatus } from '../providers/provider.types'
 
-export interface BindingSummary {
+export interface StudentAccountSummary {
   id: string
-  userId: string
   schoolId: string
   providerId: string
   displayName?: string
-  status: BindingStatus
+  status: AccountStatus
   sessionReusable: boolean
   sessionRefreshable: boolean
   sessionExpireAt?: string
@@ -18,4 +17,3 @@ export interface BindingSummary {
     shortName?: string
   }
 }
-

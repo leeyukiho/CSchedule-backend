@@ -4,7 +4,7 @@ import { ConfigModule } from '@nestjs/config'
 import { PrismaModule } from './common/prisma/prisma.module'
 import { AuthModule } from './modules/auth/auth.module'
 import { AdminModule } from './modules/admin/admin.module'
-import { BindingsModule } from './modules/bindings/bindings.module'
+import { AccountsModule } from './modules/accounts/accounts.module'
 import { FeaturesModule } from './modules/features/features.module'
 import { FeedbackModule } from './modules/feedback/feedback.module'
 import { HealthModule } from './modules/health/health.module'
@@ -14,7 +14,6 @@ import { SchoolsModule } from './modules/schools/schools.module'
 import { SubmissionsModule } from './modules/submissions/submissions.module'
 import { SyncModule } from './modules/sync/sync.module'
 import { TimetableModule } from './modules/timetable/timetable.module'
-import { UsersModule } from './modules/users/users.module'
 
 @Module({
   imports: [
@@ -25,10 +24,9 @@ import { UsersModule } from './modules/users/users.module'
     PrismaModule,
     HealthModule,
     ProvidersModule,
-    UsersModule,
     SchoolsModule,
     AuthModule,
-    BindingsModule,
+    AccountsModule,
     TimetableModule,
     FeaturesModule,
     SyncModule,

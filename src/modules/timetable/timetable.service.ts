@@ -12,41 +12,41 @@ export class TimetableService {
   ) {}
 
   async getTimetable(
-    bindingId: string,
+    accountId: string,
     termId?: string,
   ): Promise<TimetableCacheResponse> {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: bindingId },
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
       include: { school: true },
     })
 
-    if (!binding) {
-      throw new NotFoundException('Binding not found')
+    if (!account) {
+      throw new NotFoundException('Student account not found')
     }
 
     const cache = await this.prisma.courseCache.findFirst({
       where: {
-        bindingId,
+        accountId,
         ...(termId ? { termId } : {}),
       },
       orderBy: { syncedAt: 'desc' },
     })
 
     return {
-      bindingId,
-      schoolId: binding.schoolId,
-      providerId: binding.providerId,
+      accountId,
+      schoolId: account.schoolId,
+      providerId: account.providerId,
       termId: cache?.termId ?? termId,
       courses: this.asArray(cache?.coursesJson),
       terms: this.asArray(cache?.termsJson),
       sectionTimes: this.asArray(cache?.sectionTimesJson),
-      display: this.providerDisplay.getDisplay(binding.school.config, binding.providerId, 'course'),
+      display: this.providerDisplay.getDisplay(account.school.config, account.providerId, 'course'),
       syncedAt: cache?.syncedAt.toISOString(),
       session: {
-        sessionReusable: binding.sessionReusable,
-        sessionRefreshable: binding.sessionRefreshable,
-        sessionExpireAt: binding.sessionExpireAt?.toISOString(),
-        bindingStatus: binding.status,
+        sessionReusable: account.sessionReusable,
+        sessionRefreshable: account.sessionRefreshable,
+        sessionExpireAt: account.sessionExpireAt?.toISOString(),
+        accountStatus: account.status,
       },
     }
   }

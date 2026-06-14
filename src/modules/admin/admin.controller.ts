@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Put, Query, UseGuards } from '@nestjs/common'
 import { AdminGuard } from './admin.guard'
 import {
-  AdminProviderBindingUpsertInput,
+  AdminProviderConfigUpsertInput,
   AdminSchoolUpdateInput,
   AdminService,
 } from './admin.service'
@@ -42,12 +42,12 @@ export class AdminController {
     return this.adminService.updateSchool(schoolId, input)
   }
 
-  @Put('schools/:schoolId/provider-binding')
-  upsertProviderBinding(
+  @Put('schools/:schoolId/provider-config')
+  upsertProviderConfig(
     @Param('schoolId') schoolId: string,
-    @Body() input: AdminProviderBindingUpsertInput,
+    @Body() input: AdminProviderConfigUpsertInput,
   ) {
-    return this.adminService.upsertProviderBinding(schoolId, input)
+    return this.adminService.upsertProviderConfig(schoolId, input)
   }
 
   @Get('submissions')

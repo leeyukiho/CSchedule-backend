@@ -10,7 +10,7 @@ import { CourseSyncService } from './course-sync.service'
 
 export interface SyncJobResponse {
   jobId: string
-  bindingId: string
+  accountId: string
   target: DataTarget
   status:
     | 'pending'
@@ -30,16 +30,16 @@ export class SyncService {
   ) {}
 
   async createManualSync(
-    bindingId: string,
+    accountId: string,
     target: DataTarget,
     input: { username?: string; password?: string; semesterId?: string } = {},
   ): Promise<SyncJobResponse> {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: bindingId },
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
     })
 
-    if (!binding) {
-      throw new NotFoundException('Binding not found')
+    if (!account) {
+      throw new NotFoundException('Student account not found')
     }
 
     if (!['course', 'score', 'profile'].includes(target)) {
@@ -48,13 +48,12 @@ export class SyncService {
       )
     }
 
-    if (binding.status === 'unbound' || binding.status === 'disabled') {
+    if (account.status === 'unbound' || account.status === 'disabled') {
       const record = await this.prisma.syncRecord.create({
         data: {
-          userId: binding.userId,
-          bindingId: binding.id,
-          schoolId: binding.schoolId,
-          providerId: binding.providerId,
+          accountId: account.id,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
           target,
           status: 'need_login',
           errorCode: 'SESSION_EXPIRED',
@@ -65,7 +64,7 @@ export class SyncService {
 
       return {
         jobId: record.id,
-        bindingId,
+        accountId,
         target,
         status: record.status,
       }
@@ -74,10 +73,9 @@ export class SyncService {
     if (!input.username || !input.password) {
       const record = await this.prisma.syncRecord.create({
         data: {
-          userId: binding.userId,
-          bindingId: binding.id,
-          schoolId: binding.schoolId,
-          providerId: binding.providerId,
+          accountId: account.id,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
           target,
           status: 'need_login',
           errorCode: 'SESSION_EXPIRED',
@@ -88,7 +86,7 @@ export class SyncService {
 
       return {
         jobId: record.id,
-        bindingId,
+        accountId,
         target,
         status: record.status,
       }
@@ -96,10 +94,9 @@ export class SyncService {
 
     const record = await this.prisma.syncRecord.create({
       data: {
-        userId: binding.userId,
-        bindingId: binding.id,
-        schoolId: binding.schoolId,
-        providerId: binding.providerId,
+        accountId: account.id,
+        schoolId: account.schoolId,
+        providerId: account.providerId,
         target,
         status: 'running',
         startedAt: new Date(),
@@ -109,14 +106,14 @@ export class SyncService {
     try {
       if (target === 'course') {
         await this.courseSync.fetchAndCacheByCredentials({
-          bindingId,
+          accountId,
           username: input.username,
           password: input.password,
           semesterId: input.semesterId,
         })
       } else {
         await this.courseSync.fetchAndCacheFeatureByCredentials({
-          bindingId,
+          accountId,
           target,
           username: input.username,
           password: input.password,
@@ -134,7 +131,7 @@ export class SyncService {
 
       return {
         jobId: record.id,
-        bindingId,
+        accountId,
         target,
         status: 'success',
       }
@@ -164,7 +161,7 @@ export class SyncService {
 
     return {
       jobId: record.id,
-      bindingId: record.bindingId,
+      accountId: record.accountId,
       target: record.target,
       status: record.status,
     }

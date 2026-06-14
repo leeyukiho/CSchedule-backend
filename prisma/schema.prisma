@@ -7,17 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserStatus {
-  active
-  disabled
-  pending
-}
-
-enum UserRole {
-  user
-  admin
-}
-
 enum SchoolStatus {
   catalog_only
   candidate
@@ -57,7 +46,7 @@ enum CredentialSaveMode {
   password_vault
 }
 
-enum BindingStatus {
+enum AccountStatus {
   active
   need_login
   cached_only
@@ -73,15 +62,6 @@ enum SyncStatus {
   need_login
   need_webview_fetch
   cancelled
-}
-
-model User {
-  id          String           @id @default(cuid())
-  status      UserStatus       @default(active)
-  role        UserRole         @default(user)
-  bindings    UserSchoolBinding[]
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
 }
 
 model School {
@@ -106,21 +86,20 @@ model School {
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
 
-  userBindings        UserSchoolBinding[]
+  accounts            StudentAccount[]
 
   @@index([name])
   @@index([providerId])
 }
 
-model UserSchoolBinding {
+model StudentAccount {
   id                  String          @id @default(cuid())
-  userId              String
   schoolId            String
   providerId          String
   studentNoEncrypted  String?
   studentNoHash       String?
   displayName         String?
-  status              BindingStatus    @default(unbound)
+  status              AccountStatus    @default(unbound)
   authState           Json?
   cacheState          Json?
   sessionReusable     Boolean          @default(false)
@@ -132,7 +111,6 @@ model UserSchoolBinding {
   lastAuthErrorAt     DateTime?
   lastLoginAt         DateTime?
   lastCachedAt        DateTime?
-  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   school              School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
@@ -141,7 +119,6 @@ model UserSchoolBinding {
   featureCaches       FeatureCache[]
   syncRecords         SyncRecord[]
 
-  @@index([userId])
   @@index([schoolId])
   @@index([providerId])
   @@unique([schoolId, studentNoHash])
@@ -149,8 +126,7 @@ model UserSchoolBinding {
 
 model CourseCache {
   id             String          @id @default(cuid())
-  userId         String
-  bindingId      String
+  accountId      String
   schoolId       String
   providerId     String
   termId         String?
@@ -159,19 +135,17 @@ model CourseCache {
   sectionTimesJson Json
   sourceHash     String
   syncedAt       DateTime
-  binding        UserSchoolBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  account        StudentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
-  @@index([userId])
-  @@index([bindingId])
+  @@index([accountId])
   @@index([schoolId])
 }
 
 model FeatureCache {
   id           String          @id @default(cuid())
-  userId       String
-  bindingId    String
+  accountId    String
   schoolId     String
   providerId   String
   target       DataTarget
@@ -180,19 +154,17 @@ model FeatureCache {
   metaJson     Json?
   sourceHash   String
   syncedAt     DateTime
-  binding      UserSchoolBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  account      StudentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
-  @@index([userId])
-  @@index([bindingId])
+  @@index([accountId])
   @@index([target])
 }
 
 model SyncRecord {
   id            String       @id @default(cuid())
-  userId        String
-  bindingId     String
+  accountId     String
   schoolId      String
   providerId    String
   target        DataTarget
@@ -201,18 +173,16 @@ model SyncRecord {
   errorMessage  String?
   startedAt     DateTime?
   finishedAt    DateTime?
-  binding       UserSchoolBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  account       StudentAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   createdAt     DateTime     @default(now())
 
-  @@index([userId])
-  @@index([bindingId])
+  @@index([accountId])
   @@index([status])
 }
 
 model FeedbackItem {
   id          String   @id @default(cuid())
-  userId      String?
-  bindingId   String?
+  accountId   String?
   schoolId    String?
   type        String   @default("experience")
   content     String
@@ -221,14 +191,12 @@ model FeedbackItem {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@index([userId])
-  @@index([bindingId])
+  @@index([accountId])
   @@index([status])
 }
 
 model SchoolAccessSubmission {
   id               String   @id @default(cuid())
-  submitterUserId  String?
   schoolName       String
   aliases          Json     @default("[]")
   province         String?
@@ -244,6 +212,5 @@ model SchoolAccessSubmission {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  @@index([submitterUserId])
   @@index([status])
 }

@@ -31,19 +31,19 @@ export class FeaturesService {
     private readonly providerDisplay: ProviderDisplayService,
   ) {}
 
-  async getFeature(bindingId: string, target: Exclude<DataTarget, 'course'>, termId?: string) {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: bindingId },
+  async getFeature(accountId: string, target: Exclude<DataTarget, 'course'>, termId?: string) {
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
       include: { school: true },
     })
 
-    if (!binding) {
-      throw new NotFoundException('Binding not found')
+    if (!account) {
+      throw new NotFoundException('Student account not found')
     }
 
     const cache = await this.prisma.featureCache.findFirst({
       where: {
-        bindingId,
+        accountId,
         target,
         ...(termId ? { termId } : {}),
       },
@@ -52,13 +52,13 @@ export class FeaturesService {
 
     const data =
       cache?.dataJson ??
-      (target === 'profile' ? this.getAuthStateProfile(binding.authState) : null)
-    const display = this.providerDisplay.getDisplay(binding.school.config, binding.providerId, target)
+      (target === 'profile' ? this.getAuthStateProfile(account.authState) : null)
+    const display = this.providerDisplay.getDisplay(account.school.config, account.providerId, target)
 
     return {
-      bindingId,
-      schoolId: binding.schoolId,
-      providerId: binding.providerId,
+      accountId,
+      schoolId: account.schoolId,
+      providerId: account.providerId,
       target,
       termId: cache?.termId ?? termId,
       data,
@@ -66,35 +66,35 @@ export class FeaturesService {
       display,
       syncedAt: cache?.syncedAt.toISOString(),
       session: {
-        sessionReusable: binding.sessionReusable,
-        sessionRefreshable: binding.sessionRefreshable,
-        sessionExpireAt: binding.sessionExpireAt?.toISOString(),
-        bindingStatus: binding.status,
+        sessionReusable: account.sessionReusable,
+        sessionRefreshable: account.sessionRefreshable,
+        sessionExpireAt: account.sessionExpireAt?.toISOString(),
+        accountStatus: account.status,
       },
     }
   }
 
-  async saveProfile(bindingId: string, profile: Record<string, unknown>) {
+  async saveProfile(accountId: string, profile: Record<string, unknown>) {
     if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
       throw new BadRequestException('Invalid profile payload')
     }
 
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: bindingId },
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
       include: { school: true },
     })
 
-    if (!binding) {
-      throw new NotFoundException('Binding not found')
+    if (!account) {
+      throw new NotFoundException('Student account not found')
     }
 
-    const display = this.providerDisplay.getDisplay(binding.school.config, binding.providerId, 'profile')
+    const display = this.providerDisplay.getDisplay(account.school.config, account.providerId, 'profile')
     const latestCache = await this.prisma.featureCache.findFirst({
-      where: { bindingId, target: 'profile' },
+      where: { accountId, target: 'profile' },
       orderBy: { syncedAt: 'desc' },
     })
     const existingProfile = {
-      ...this.asRecord(this.getAuthStateProfile(binding.authState)),
+      ...this.asRecord(this.getAuthStateProfile(account.authState)),
       ...this.asRecord(latestCache?.dataJson),
     }
     const savedProfile = {
@@ -105,7 +105,7 @@ export class FeaturesService {
     const sourceHash = createHash('sha256')
       .update(
         JSON.stringify({
-          bindingId,
+          accountId,
           target: 'profile',
           profile: savedProfile,
         }),
@@ -113,7 +113,7 @@ export class FeaturesService {
       .digest('hex')
 
     const sameCache = await this.prisma.featureCache.findFirst({
-      where: { bindingId, target: 'profile', sourceHash },
+      where: { accountId, target: 'profile', sourceHash },
       select: { id: true },
     })
 
@@ -129,10 +129,9 @@ export class FeaturesService {
     } else {
       await this.prisma.featureCache.create({
         data: {
-          userId: binding.userId,
-          bindingId,
-          schoolId: binding.schoolId,
-          providerId: binding.providerId,
+          accountId,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
           target: 'profile',
           dataJson: this.toJson(savedProfile),
           metaJson: this.toJson({ source: 'manual_edit', editedAt: syncedAt.toISOString() }),
@@ -142,22 +141,22 @@ export class FeaturesService {
       })
     }
 
-    await this.prisma.userSchoolBinding.update({
-      where: { id: bindingId },
+    await this.prisma.studentAccount.update({
+      where: { id: accountId },
       data: {
         displayName:
           typeof savedProfile.name === 'string' && savedProfile.name.trim()
             ? savedProfile.name.trim()
             : undefined,
         authState: this.toJson({
-          ...this.asRecord(binding.authState),
+          ...this.asRecord(account.authState),
           profile: savedProfile,
         }),
         lastCachedAt: syncedAt,
       },
     })
 
-    return this.getFeature(bindingId, 'profile')
+    return this.getFeature(accountId, 'profile')
   }
 
   private pickEditableProfileFields(

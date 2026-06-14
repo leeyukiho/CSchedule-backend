@@ -7,7 +7,7 @@ import { Prisma } from "@prisma/client";
 import { createHash } from "crypto";
 
 import { PrismaService } from "../../common/prisma/prisma.service";
-import { StudentIdentityService } from "../bindings/student-identity.service";
+import { StudentIdentityService } from "../accounts/student-identity.service";
 import { DataAccessMode, DataTarget } from "../providers/provider.types";
 
 export interface RawDataUploadRequest {
@@ -28,13 +28,13 @@ export class RawDataService {
     private readonly studentIdentity: StudentIdentityService,
   ) {}
 
-  async uploadRawData(bindingId: string, input: RawDataUploadRequest) {
-    let binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: bindingId },
+  async uploadRawData(accountId: string, input: RawDataUploadRequest) {
+    let account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
     });
 
-    if (!binding) {
-      throw new NotFoundException("Binding not found");
+    if (!account) {
+      throw new NotFoundException("Student account not found");
     }
 
     if (!input.target || !input.accessMode || !input.contentType) {
@@ -56,10 +56,10 @@ export class RawDataService {
       this.studentIdentity.extractDisplayName(parsed.meta);
 
     if (studentNo) {
-      binding = await this.studentIdentity.bindStudentIdentity({
-        bindingId: binding.id,
-        schoolId: binding.schoolId,
-        providerId: binding.providerId,
+      account = await this.studentIdentity.bindStudentIdentity({
+        accountId: account.id,
+        schoolId: account.schoolId,
+        providerId: account.providerId,
         studentNo,
         displayName,
       });
@@ -71,10 +71,9 @@ export class RawDataService {
     if (input.target === "course") {
       await this.prisma.courseCache.create({
         data: {
-          userId: binding.userId,
-          bindingId: binding.id,
-          schoolId: binding.schoolId,
-          providerId: binding.providerId,
+          accountId: account.id,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
           termId: input.termId ?? parsed.termId,
           coursesJson: this.toJson(parsed.data),
           termsJson: this.toJson(parsed.terms),
@@ -86,10 +85,9 @@ export class RawDataService {
     } else {
       await this.prisma.featureCache.create({
         data: {
-          userId: binding.userId,
-          bindingId: binding.id,
-          schoolId: binding.schoolId,
-          providerId: binding.providerId,
+          accountId: account.id,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
           target: input.target,
           termId: input.termId ?? parsed.termId,
           dataJson: this.toJson(parsed.data),
@@ -101,12 +99,12 @@ export class RawDataService {
     }
 
     await this.prisma.$transaction([
-      this.prisma.userSchoolBinding.update({
-        where: { id: binding.id },
+      this.prisma.studentAccount.update({
+        where: { id: account.id },
         data: {
           status: "active",
           cacheState: this.toJson({
-            ...this.asRecord(binding.cacheState),
+            ...this.asRecord(account.cacheState),
             [input.target]: {
               status: "cached",
               termId: input.termId ?? parsed.termId,
@@ -120,10 +118,9 @@ export class RawDataService {
       }),
       this.prisma.syncRecord.create({
         data: {
-          userId: binding.userId,
-          bindingId: binding.id,
-          schoolId: binding.schoolId,
-          providerId: binding.providerId,
+          accountId: account.id,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
           target: input.target,
           status: "success",
           startedAt: syncedAt,
@@ -133,7 +130,7 @@ export class RawDataService {
     ]);
 
     return {
-      bindingId: binding.id,
+      accountId: account.id,
       target: input.target,
       cacheId: sourceHash,
       status: "cached",
@@ -143,11 +140,11 @@ export class RawDataService {
   }
 
   async completeWebviewSync(
-    bindingId: string,
+    accountId: string,
     completedTargets: DataTarget[] = [],
   ) {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: bindingId },
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
       include: {
         courseCaches: {
           select: { id: true },
@@ -157,20 +154,20 @@ export class RawDataService {
       },
     });
 
-    if (!binding) {
-      throw new NotFoundException("Binding not found");
+    if (!account) {
+      throw new NotFoundException("Student account not found");
     }
 
     const hasCourseCache =
-      completedTargets.includes("course") || binding.courseCaches.length > 0;
+      completedTargets.includes("course") || account.courseCaches.length > 0;
     const missingRequiredTargets = hasCourseCache ? [] : ["course"];
 
     return {
-      bindingId,
+      accountId,
       status: missingRequiredTargets.length === 0 ? "ready" : "partial",
       canCloseWebview: missingRequiredTargets.length === 0,
-      sessionReusable: binding.sessionReusable,
-      sessionExpireAt: binding.sessionExpireAt?.toISOString(),
+      sessionReusable: account.sessionReusable,
+      sessionExpireAt: account.sessionExpireAt?.toISOString(),
       missingRequiredTargets,
     };
   }

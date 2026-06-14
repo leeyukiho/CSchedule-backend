@@ -20,7 +20,7 @@ export interface AdminSchoolUpdateInput {
   note?: string
 }
 
-export interface AdminProviderBindingUpsertInput {
+export interface AdminProviderConfigUpsertInput {
   providerId: string
   loginMode: LoginMode
   dataAccess?: Partial<Record<'course' | 'score' | 'exam' | 'profile', DataAccessMode[]>>
@@ -114,9 +114,9 @@ export class AdminService {
     return school
   }
 
-  async upsertProviderBinding(
+  async upsertProviderConfig(
     schoolId: string,
-    input: AdminProviderBindingUpsertInput,
+    input: AdminProviderConfigUpsertInput,
   ) {
     const school = await this.prisma.school.findUnique({ where: { id: schoolId } })
 
@@ -226,18 +226,18 @@ export class AdminService {
   }
 
   async getStats() {
-    const [schoolCount, enabledCount, bindingCount, submissionCount, feedbackCount] =
+    const [schoolCount, enabledCount, accountCount, submissionCount, feedbackCount] =
       await Promise.all([
         this.prisma.school.count(),
         this.prisma.school.count({ where: { enabled: true } }),
-        this.prisma.userSchoolBinding.count(),
+        this.prisma.studentAccount.count(),
         this.prisma.schoolAccessSubmission.count({ where: { status: 'submitted' } }),
         this.prisma.feedbackItem.count({ where: { status: 'pending' } }),
       ])
 
     return {
       schools: { total: schoolCount, enabled: enabledCount },
-      bindings: bindingCount,
+      accounts: accountCount,
       pendingSubmissions: submissionCount,
       pendingFeedback: feedbackCount,
     }

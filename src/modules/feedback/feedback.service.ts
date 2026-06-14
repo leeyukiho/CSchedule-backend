@@ -3,8 +3,7 @@ import { BadRequestException, Injectable } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 
 export interface SubmitFeedbackRequest {
-  userId?: string
-  bindingId?: string
+  accountId?: string
   type?: string
   content: string
   contact?: string
@@ -21,17 +20,17 @@ export class FeedbackService {
       throw new BadRequestException('content is required')
     }
 
-    const binding = input.bindingId
-      ? await this.prisma.userSchoolBinding.findUnique({
-          where: { id: input.bindingId },
+    const accountId = input.accountId
+    const account = accountId
+      ? await this.prisma.studentAccount.findUnique({
+          where: { id: accountId },
         })
       : null
 
     const feedback = await this.prisma.feedbackItem.create({
       data: {
-        userId: input.userId ?? binding?.userId,
-        bindingId: input.bindingId,
-        schoolId: binding?.schoolId,
+        accountId,
+        schoolId: account?.schoolId,
         type: String(input.type || 'experience').trim().slice(0, 40),
         content: content.slice(0, 1000),
         contact: input.contact ? String(input.contact).trim().slice(0, 120) : undefined,
@@ -45,4 +44,3 @@ export class FeedbackService {
     }
   }
 }
-

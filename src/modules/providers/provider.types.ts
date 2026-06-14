@@ -38,7 +38,7 @@ export type CredentialSaveMode =
   | 'session_refresh'
   | 'password_vault'
 
-export type BindingStatus =
+export type AccountStatus =
   | 'active'
   | 'need_login'
   | 'cached_only'
@@ -183,7 +183,7 @@ export interface SubmitLoginInput {
 }
 
 export interface LoginResult {
-  bindingStatus: BindingStatus
+  accountStatus: AccountStatus
   sessionReusable: boolean
   sessionRefreshable: boolean
   sessionExpireAt?: string

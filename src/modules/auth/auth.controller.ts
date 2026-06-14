@@ -23,7 +23,7 @@ export class SessionImportController {
   @Post()
   importSession(
     @Param('schoolId') schoolId: string,
-    @Body() input: { contextId?: string; bindingId?: string; session?: unknown },
+    @Body() input: { contextId?: string; accountId?: string; session?: unknown },
   ) {
     return this.authService.importSession(schoolId, input)
   }

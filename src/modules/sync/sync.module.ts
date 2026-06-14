@@ -1,14 +1,14 @@
 import { Module } from "@nestjs/common";
 
-import { BindingsModule } from "../bindings/bindings.module";
+import { AccountsModule } from "../accounts/accounts.module";
 import { ProvidersModule } from "../providers/providers.module";
 import { CourseSyncService } from "./course-sync.service";
-import { BindingSyncController, SyncController } from "./sync.controller";
+import { AccountSyncController, SyncController } from "./sync.controller";
 import { SyncService } from "./sync.service";
 
 @Module({
-  imports: [BindingsModule, ProvidersModule],
-  controllers: [SyncController, BindingSyncController],
+  imports: [AccountsModule, ProvidersModule],
+  controllers: [SyncController, AccountSyncController],
   providers: [SyncService, CourseSyncService],
   exports: [SyncService, CourseSyncService],
 })

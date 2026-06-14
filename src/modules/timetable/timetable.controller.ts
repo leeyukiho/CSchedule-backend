@@ -2,15 +2,15 @@ import { Controller, Get, Param, Query } from '@nestjs/common'
 
 import { TimetableService } from './timetable.service'
 
-@Controller('bindings/:bindingId/timetable')
+@Controller('account/:accountId/timetable')
 export class TimetableController {
   constructor(private readonly timetableService: TimetableService) {}
 
   @Get()
   getTimetable(
-    @Param('bindingId') bindingId: string,
+    @Param('accountId') accountId: string,
     @Query('termId') termId?: string,
   ) {
-    return this.timetableService.getTimetable(bindingId, termId)
+    return this.timetableService.getTimetable(accountId, termId)
   }
 }

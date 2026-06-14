@@ -7,7 +7,7 @@ import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 
 import { PrismaService } from "../../common/prisma/prisma.service";
-import { StudentIdentityService } from "../bindings/student-identity.service";
+import { StudentIdentityService } from "../accounts/student-identity.service";
 import {
   CourseFetchResult,
   DataTarget,
@@ -25,21 +25,21 @@ export class CourseSyncService {
   ) {}
 
   async fetchAndCacheByCredentials(input: {
-    bindingId: string;
+    accountId: string;
     username: string;
     password: string;
     semesterId?: string;
   }) {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: input.bindingId },
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: input.accountId },
       include: { school: true },
     });
 
-    if (!binding) {
-      throw new NotFoundException("Binding not found");
+    if (!account) {
+      throw new NotFoundException("Student account not found");
     }
 
-    const provider = this.providers.getProvider(binding.providerId);
+    const provider = this.providers.getProvider(account.providerId);
 
     if (!provider.course) {
       throw new BadRequestException(
@@ -51,19 +51,18 @@ export class CourseSyncService {
       username: input.username,
       password: input.password,
       semesterId: input.semesterId,
-      providerConfig: this.getProviderConfig(binding.school.config),
+      providerConfig: this.getProviderConfig(account.school.config),
     });
 
     return this.writeCourseCache({
-      binding,
+      account,
       result,
     });
   }
 
   private async writeCourseCache(input: {
-    binding: {
+    account: {
       id: string;
-      userId: string;
       schoolId: string;
       providerId: string;
       cacheState: Prisma.JsonValue | null;
@@ -81,8 +80,8 @@ export class CourseSyncService {
     const sourceHash = createHash("sha256")
       .update(
         JSON.stringify({
-          bindingId: input.binding.id,
-          providerId: input.binding.providerId,
+          accountId: input.account.id,
+          providerId: input.account.providerId,
           termId,
           courses,
         }),
@@ -90,7 +89,7 @@ export class CourseSyncService {
       .digest("hex");
 
     const existingCache = await this.prisma.courseCache.findFirst({
-      where: { bindingId: input.binding.id, sourceHash },
+      where: { accountId: input.account.id, sourceHash },
       select: { id: true },
     });
     const cache = existingCache
@@ -106,10 +105,9 @@ export class CourseSyncService {
         })
       : await this.prisma.courseCache.create({
           data: {
-            userId: input.binding.userId,
-            bindingId: input.binding.id,
-            schoolId: input.binding.schoolId,
-            providerId: input.binding.providerId,
+            accountId: input.account.id,
+            schoolId: input.account.schoolId,
+            providerId: input.account.providerId,
             termId,
             coursesJson: this.toJson(courses),
             termsJson: this.toJson(terms),
@@ -121,7 +119,7 @@ export class CourseSyncService {
 
     for (const feature of featureResults) {
       await this.writeFeatureCache({
-        binding: input.binding,
+        account: input.account,
         target: feature.target,
         result: feature.result,
         syncedAt,
@@ -137,24 +135,24 @@ export class CourseSyncService {
       syncedBy: "server_session",
       syncedAt: syncedAt.toISOString(),
     });
-    const identityBinding = await this.studentIdentity.bindStudentIdentity({
-      bindingId: input.binding.id,
-      schoolId: input.binding.schoolId,
-      providerId: input.binding.providerId,
+    const identityAccount = await this.studentIdentity.bindStudentIdentity({
+      accountId: input.account.id,
+      schoolId: input.account.schoolId,
+      providerId: input.account.providerId,
       studentNo: input.result.profile?.studentId,
       displayName: input.result.profile?.name,
       authState,
     });
 
-    await this.prisma.userSchoolBinding.update({
-      where: { id: identityBinding.id },
+    await this.prisma.studentAccount.update({
+      where: { id: identityAccount.id },
       data: {
         displayName: input.result.profile?.name || undefined,
         status: "cached_only",
         authState,
         cacheState: this.toJson({
           ...this.asRecord(
-            identityBinding.cacheState ?? input.binding.cacheState,
+            identityAccount.cacheState ?? input.account.cacheState,
           ),
           course: {
             status: "cached",
@@ -185,7 +183,7 @@ export class CourseSyncService {
     });
 
     return {
-      bindingId: identityBinding.id,
+      accountId: identityAccount.id,
       cacheId: cache.id,
       termId,
       parsedCount: courses.length,
@@ -194,22 +192,22 @@ export class CourseSyncService {
   }
 
   async fetchAndCacheFeatureByCredentials(input: {
-    bindingId: string;
+    accountId: string;
     target: Exclude<DataTarget, "course">;
     username: string;
     password: string;
     semesterId?: string;
   }) {
-    const binding = await this.prisma.userSchoolBinding.findUnique({
-      where: { id: input.bindingId },
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: input.accountId },
       include: { school: true },
     });
 
-    if (!binding) {
-      throw new NotFoundException("Binding not found");
+    if (!account) {
+      throw new NotFoundException("Student account not found");
     }
 
-    const provider = this.providers.getProvider(binding.providerId);
+    const provider = this.providers.getProvider(account.providerId);
     const connector = provider[input.target];
 
     if (!connector) {
@@ -222,31 +220,31 @@ export class CourseSyncService {
       username: input.username,
       password: input.password,
       semesterId: input.semesterId,
-      providerConfig: this.getProviderConfig(binding.school.config),
+      providerConfig: this.getProviderConfig(account.school.config),
     });
     const syncedAt = new Date();
     const cache = await this.writeFeatureCache({
-      binding,
+      account,
       target: input.target,
       result,
       syncedAt,
     });
 
-    await this.prisma.userSchoolBinding.update({
-      where: { id: binding.id },
+    await this.prisma.studentAccount.update({
+      where: { id: account.id },
       data: {
         displayName:
           input.target === "profile" && result.profile?.name
             ? result.profile.name
             : undefined,
         authState: this.toJson({
-          ...this.asRecord(binding.authState),
+          ...this.asRecord(account.authState),
           ...(input.target === "profile" ? { profile: result.data } : {}),
           syncedBy: "server_session",
           syncedAt: syncedAt.toISOString(),
         }),
         cacheState: this.toJson({
-          ...this.asRecord(binding.cacheState),
+          ...this.asRecord(account.cacheState),
           [input.target]: {
             status: "cached",
             termId: result.termId,
@@ -261,7 +259,7 @@ export class CourseSyncService {
     });
 
     return {
-      bindingId: binding.id,
+      accountId: account.id,
       cacheId: cache.id,
       termId: result.termId,
       parsedCount: this.countFeatureItems(result.data),
@@ -270,9 +268,8 @@ export class CourseSyncService {
   }
 
   private async writeFeatureCache(input: {
-    binding: {
+    account: {
       id: string;
-      userId: string;
       schoolId: string;
       providerId: string;
     };
@@ -283,8 +280,8 @@ export class CourseSyncService {
     const sourceHash = createHash("sha256")
       .update(
         JSON.stringify({
-          bindingId: input.binding.id,
-          providerId: input.binding.providerId,
+          accountId: input.account.id,
+          providerId: input.account.providerId,
           target: input.target,
           termId: input.result.termId,
           data: input.result.data,
@@ -293,7 +290,7 @@ export class CourseSyncService {
       .digest("hex");
     const existingCache = await this.prisma.featureCache.findFirst({
       where: {
-        bindingId: input.binding.id,
+        accountId: input.account.id,
         target: input.target,
         sourceHash,
       },
@@ -315,10 +312,9 @@ export class CourseSyncService {
 
     return this.prisma.featureCache.create({
       data: {
-        userId: input.binding.userId,
-        bindingId: input.binding.id,
-        schoolId: input.binding.schoolId,
-        providerId: input.binding.providerId,
+        accountId: input.account.id,
+        schoolId: input.account.schoolId,
+        providerId: input.account.providerId,
         target: input.target,
         sourceHash,
         ...data,

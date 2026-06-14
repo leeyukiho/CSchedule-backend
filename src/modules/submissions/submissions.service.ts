@@ -4,7 +4,6 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { DataTarget, LoginMode } from '../providers/provider.types'
 
 export interface CreateSchoolSubmissionRequest {
-  submitterUserId?: string
   schoolName: string
   aliases?: string[]
   province?: string
@@ -30,7 +29,6 @@ export class SubmissionsService {
 
     const submission = await this.prisma.schoolAccessSubmission.create({
       data: {
-        submitterUserId: input.submitterUserId,
         schoolName,
         aliases: Array.isArray(input.aliases) ? input.aliases : [],
         province: input.province,
@@ -51,4 +49,3 @@ export class SubmissionsService {
     }
   }
 }
-

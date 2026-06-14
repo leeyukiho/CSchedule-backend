@@ -13,16 +13,16 @@ export class SyncController {
   }
 }
 
-@Controller('bindings/:bindingId/sync')
-export class BindingSyncController {
+@Controller('account/:accountId/sync')
+export class AccountSyncController {
   constructor(private readonly syncService: SyncService) {}
 
   @Post(':target')
   createManualSync(
-    @Param('bindingId') bindingId: string,
+    @Param('accountId') accountId: string,
     @Param('target') target: DataTarget,
     @Body() input: { username?: string; password?: string; semesterId?: string } = {},
   ) {
-    return this.syncService.createManualSync(bindingId, target, input)
+    return this.syncService.createManualSync(accountId, target, input)
   }
 }

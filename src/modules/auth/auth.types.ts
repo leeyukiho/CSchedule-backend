@@ -9,7 +9,7 @@ export interface LoginSubmitRequest {
 }
 
 export interface LoginSubmitResponse {
-  bindingId: string
+  accountId: string
   sessionId?: string
   status: 'success' | 'cached' | 'need_webview_fetch'
   sessionReusable?: boolean
