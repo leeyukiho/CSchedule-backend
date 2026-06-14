@@ -1,4 +1,4 @@
-import { BindingStatus } from '../providers/provider.types'
+import { BindingStatus, FeatureDisplayConfig } from '../providers/provider.types'
 
 export interface BindingSessionSummary {
   sessionReusable: boolean
@@ -15,6 +15,7 @@ export interface TimetableCacheResponse {
   courses: unknown[]
   terms: unknown[]
   sectionTimes: unknown[]
+  display?: FeatureDisplayConfig
   syncedAt?: string
   session: BindingSessionSummary
 }

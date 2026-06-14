@@ -67,6 +67,38 @@ export interface FeatureCapability {
   status: 'unsupported' | 'researching' | 'beta' | 'enabled'
 }
 
+export type FeatureDisplayKind =
+  | 'course_grid'
+  | 'profile_fields'
+  | 'score_semesters'
+  | 'exam_list'
+  | 'raw'
+
+export interface FeatureDisplayField {
+  key: string
+  label: string
+  visible?: boolean
+  editable?: boolean
+  primary?: boolean
+  fallbackKeys?: string[]
+}
+
+export interface FeatureDisplayConfig {
+  title?: string
+  kind?: FeatureDisplayKind
+  summaryFields?: FeatureDisplayField[]
+  detailFields?: FeatureDisplayField[]
+  editableFields?: FeatureDisplayField[]
+  itemFields?: FeatureDisplayField[]
+  itemPath?: string
+  groupPath?: string
+  emptyText?: string
+}
+
+export type FeatureDisplayMap = Partial<
+  Record<DataTarget, FeatureDisplayConfig>
+>
+
 export interface AuthCapability {
   captchaRequired: boolean
   webviewRequired: boolean
@@ -170,7 +202,10 @@ export interface SessionValidationResult {
 
 export interface LoginStrategy {
   mode: LoginMode
-  createContext(input: { schoolId: string; providerConfig?: Record<string, unknown> }): Promise<LoginContext>
+  createContext(input: {
+    schoolId: string
+    providerConfig?: Record<string, unknown>
+  }): Promise<LoginContext>
   submit?(input: SubmitLoginInput): Promise<LoginResult>
   importSession?(input: unknown): Promise<LoginResult>
   validateSession(session: unknown): Promise<SessionValidationResult>
@@ -188,6 +223,7 @@ export interface SchoolProviderMeta {
   eduSystemType?: EduSystemType
   capabilities: ProviderCapabilities
   auth?: AuthCapability
+  featureDisplay?: FeatureDisplayMap
   status?: ProviderStatus
   verifiedAt?: string
 }
@@ -197,9 +233,9 @@ export interface SchoolProvider {
   meta: SchoolProviderMeta
   login?: LoginStrategy
   course?: CourseConnector
-  score?: unknown
-  exam?: unknown
-  profile?: unknown
+  score?: ScoreConnector
+  exam?: FeatureConnector<unknown[]>
+  profile?: ProfileConnector
 }
 
 export interface ProviderTerm {
@@ -229,8 +265,23 @@ export interface ProviderCourse {
 export interface ProviderProfile {
   name?: string
   studentId?: string
+  maskedStudentId?: string
   className?: string
   major?: string
+  role?: string
+  grade?: string
+  level?: string
+  gender?: string
+  birthDate?: string
+  politicalStatus?: string
+  phone?: string
+  email?: string
+  nativePlace?: string
+  enrollmentDate?: string
+  studentStatus?: string
+  dormitory?: string
+  counselor?: string
+  updatedAt?: string
 }
 
 export interface ProviderSchedule {
@@ -244,6 +295,7 @@ export interface ProviderSchedule {
 export interface CourseFetchResult {
   schedule: ProviderSchedule
   profile?: ProviderProfile | null
+  features?: Partial<Record<Exclude<DataTarget, 'course'>, unknown>>
 }
 
 export interface CourseConnector {
@@ -254,3 +306,49 @@ export interface CourseConnector {
     providerConfig?: Record<string, unknown>
   }): Promise<CourseFetchResult>
 }
+
+export interface FeatureFetchInput {
+  username: string
+  password: string
+  semesterId?: string
+  providerConfig?: Record<string, unknown>
+}
+
+export interface FeatureFetchResult<TData = unknown> {
+  data: TData
+  termId?: string
+  meta?: Record<string, unknown>
+  profile?: ProviderProfile | null
+}
+
+export interface FeatureConnector<TData = unknown> {
+  fetchByCredentials(
+    input: FeatureFetchInput,
+  ): Promise<FeatureFetchResult<TData>>
+}
+
+export interface ProviderGradeItem {
+  name: string
+  credit: string
+  score: string
+  scoreLow?: boolean
+  gpa: string
+}
+
+export interface ProviderGradeSemester {
+  id: string
+  title: string
+  credit: string
+  average: string
+  gpa: string
+  expanded?: boolean
+  grades: ProviderGradeItem[]
+}
+
+export interface ProviderScoreResult {
+  summary: Array<{ label: string; value: string }>
+  semesters: ProviderGradeSemester[]
+}
+
+export type ScoreConnector = FeatureConnector<ProviderScoreResult>
+export type ProfileConnector = FeatureConnector<ProviderProfile>

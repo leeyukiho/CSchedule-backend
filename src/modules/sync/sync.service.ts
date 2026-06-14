@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common'
 
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { DataTarget } from '../providers/provider.types'
@@ -38,8 +42,10 @@ export class SyncService {
       throw new NotFoundException('Binding not found')
     }
 
-    if (target !== 'course') {
-      throw new BadRequestException('UNSUPPORTED_TARGET: only course sync is implemented')
+    if (!['course', 'score', 'profile'].includes(target)) {
+      throw new BadRequestException(
+        'UNSUPPORTED_TARGET: only course, score and profile sync are implemented',
+      )
     }
 
     if (binding.status === 'unbound' || binding.status === 'disabled') {
@@ -101,12 +107,22 @@ export class SyncService {
     })
 
     try {
-      await this.courseSync.fetchAndCacheByCredentials({
-        bindingId,
-        username: input.username,
-        password: input.password,
-        semesterId: input.semesterId,
-      })
+      if (target === 'course') {
+        await this.courseSync.fetchAndCacheByCredentials({
+          bindingId,
+          username: input.username,
+          password: input.password,
+          semesterId: input.semesterId,
+        })
+      } else {
+        await this.courseSync.fetchAndCacheFeatureByCredentials({
+          bindingId,
+          target,
+          username: input.username,
+          password: input.password,
+          semesterId: input.semesterId,
+        })
+      }
 
       await this.prisma.syncRecord.update({
         where: { id: record.id },

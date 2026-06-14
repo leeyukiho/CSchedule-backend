@@ -3,7 +3,8 @@ import { Prisma } from '@prisma/client'
 import { createHash } from 'node:crypto'
 
 import { PrismaService } from '../../common/prisma/prisma.service'
-import { DataTarget } from '../providers/provider.types'
+import { ProviderDisplayService } from '../providers/provider-display.service'
+import { DataTarget, FeatureDisplayConfig } from '../providers/provider.types'
 
 const EDITABLE_PROFILE_FIELDS = [
   'name',
@@ -25,11 +26,15 @@ const EDITABLE_PROFILE_FIELDS = [
 
 @Injectable()
 export class FeaturesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly providerDisplay: ProviderDisplayService,
+  ) {}
 
   async getFeature(bindingId: string, target: Exclude<DataTarget, 'course'>, termId?: string) {
     const binding = await this.prisma.userSchoolBinding.findUnique({
       where: { id: bindingId },
+      include: { school: true },
     })
 
     if (!binding) {
@@ -48,6 +53,7 @@ export class FeaturesService {
     const data =
       cache?.dataJson ??
       (target === 'profile' ? this.getAuthStateProfile(binding.authState) : null)
+    const display = this.providerDisplay.getDisplay(binding.school.config, binding.providerId, target)
 
     return {
       bindingId,
@@ -57,6 +63,7 @@ export class FeaturesService {
       termId: cache?.termId ?? termId,
       data,
       meta: cache?.metaJson ?? null,
+      display,
       syncedAt: cache?.syncedAt.toISOString(),
       session: {
         sessionReusable: binding.sessionReusable,
@@ -74,12 +81,14 @@ export class FeaturesService {
 
     const binding = await this.prisma.userSchoolBinding.findUnique({
       where: { id: bindingId },
+      include: { school: true },
     })
 
     if (!binding) {
       throw new NotFoundException('Binding not found')
     }
 
+    const display = this.providerDisplay.getDisplay(binding.school.config, binding.providerId, 'profile')
     const latestCache = await this.prisma.featureCache.findFirst({
       where: { bindingId, target: 'profile' },
       orderBy: { syncedAt: 'desc' },
@@ -90,7 +99,7 @@ export class FeaturesService {
     }
     const savedProfile = {
       ...existingProfile,
-      ...this.pickEditableProfileFields(profile),
+      ...this.pickEditableProfileFields(profile, display),
     }
     const syncedAt = new Date()
     const sourceHash = createHash('sha256')
@@ -151,8 +160,13 @@ export class FeaturesService {
     return this.getFeature(bindingId, 'profile')
   }
 
-  private pickEditableProfileFields(profile: Record<string, unknown>) {
-    return EDITABLE_PROFILE_FIELDS.reduce<Record<string, string>>((result, field) => {
+  private pickEditableProfileFields(
+    profile: Record<string, unknown>,
+    display?: FeatureDisplayConfig,
+  ) {
+    const editableFields = this.getEditableProfileFields(display)
+
+    return editableFields.reduce<Record<string, string>>((result, field) => {
       const value = profile[field]
 
       if (value === null || value === undefined) {
@@ -163,6 +177,21 @@ export class FeaturesService {
       result[field] = String(value).trim()
       return result
     }, {})
+  }
+
+  private getEditableProfileFields(display?: FeatureDisplayConfig) {
+    const fields = display?.editableFields?.length
+      ? display.editableFields
+      : display?.detailFields?.filter((field) => field.editable)
+
+    if (!fields?.length) {
+      return EDITABLE_PROFILE_FIELDS
+    }
+
+    return fields
+      .filter((field) => field.visible !== false && field.editable !== false)
+      .map((field) => field.key)
+      .filter((field) => field && field !== 'studentId' && field !== 'maskedStudentId')
   }
 
   private getAuthStateProfile(authState: Prisma.JsonValue | null) {

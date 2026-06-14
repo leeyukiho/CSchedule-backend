@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { ProviderDisplayService } from '../providers/provider-display.service'
 import { TimetableCacheResponse } from './timetable.types'
 
 @Injectable()
 export class TimetableService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly providerDisplay: ProviderDisplayService,
+  ) {}
 
   async getTimetable(
     bindingId: string,
@@ -13,6 +17,7 @@ export class TimetableService {
   ): Promise<TimetableCacheResponse> {
     const binding = await this.prisma.userSchoolBinding.findUnique({
       where: { id: bindingId },
+      include: { school: true },
     })
 
     if (!binding) {
@@ -35,6 +40,7 @@ export class TimetableService {
       courses: this.asArray(cache?.coursesJson),
       terms: this.asArray(cache?.termsJson),
       sectionTimes: this.asArray(cache?.sectionTimesJson),
+      display: this.providerDisplay.getDisplay(binding.school.config, binding.providerId, 'course'),
       syncedAt: cache?.syncedAt.toISOString(),
       session: {
         sessionReusable: binding.sessionReusable,

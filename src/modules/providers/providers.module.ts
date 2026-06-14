@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 
+import { ProviderDisplayService } from './provider-display.service'
 import { ProviderRegistryService } from './provider-registry.service'
 import { whhxitProvider } from './adapters/whhxit.provider'
 import { wtbuProvider } from './adapters/wtbu.provider'
@@ -15,7 +16,8 @@ import { wtbuProvider } from './adapters/wtbu.provider'
         return registry
       },
     },
+    ProviderDisplayService,
   ],
-  exports: [ProviderRegistryService],
+  exports: [ProviderRegistryService, ProviderDisplayService],
 })
 export class ProvidersModule {}

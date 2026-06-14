@@ -8,7 +8,12 @@ import { createHash } from "node:crypto";
 
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { StudentIdentityService } from "../bindings/student-identity.service";
-import { CourseFetchResult, ProviderCourse } from "../providers/provider.types";
+import {
+  CourseFetchResult,
+  DataTarget,
+  FeatureFetchResult,
+  ProviderCourse,
+} from "../providers/provider.types";
 import { ProviderRegistryService } from "../providers/provider-registry.service";
 
 @Injectable()
@@ -72,6 +77,7 @@ export class CourseSyncService {
     const syncedAt = new Date();
     const terms = input.result.schedule.semesters ?? [];
     const sectionTimes = input.result.schedule.sectionTimes ?? [];
+    const featureResults = this.getFeatureResults(input.result);
     const sourceHash = createHash("sha256")
       .update(
         JSON.stringify({
@@ -113,8 +119,21 @@ export class CourseSyncService {
           },
         });
 
+    for (const feature of featureResults) {
+      await this.writeFeatureCache({
+        binding: input.binding,
+        target: feature.target,
+        result: feature.result,
+        syncedAt,
+      });
+    }
+
     const authState = this.toJson({
-      profile: input.result.profile ?? undefined,
+      profile:
+        featureResults.find((feature) => feature.target === "profile")?.result
+          .data ??
+        input.result.profile ??
+        undefined,
       syncedBy: "server_session",
       syncedAt: syncedAt.toISOString(),
     });
@@ -143,6 +162,17 @@ export class CourseSyncService {
             syncedAt: syncedAt.toISOString(),
             count: courses.length,
           },
+          ...featureResults.reduce<Record<string, unknown>>(
+            (state, feature) => {
+              state[feature.target] = {
+                status: "cached",
+                termId: feature.result.termId,
+                syncedAt: syncedAt.toISOString(),
+              };
+              return state;
+            },
+            {},
+          ),
         }),
         sessionReusable: false,
         sessionRefreshable: false,
@@ -161,6 +191,197 @@ export class CourseSyncService {
       parsedCount: courses.length,
       syncedAt,
     };
+  }
+
+  async fetchAndCacheFeatureByCredentials(input: {
+    bindingId: string;
+    target: Exclude<DataTarget, "course">;
+    username: string;
+    password: string;
+    semesterId?: string;
+  }) {
+    const binding = await this.prisma.userSchoolBinding.findUnique({
+      where: { id: input.bindingId },
+      include: { school: true },
+    });
+
+    if (!binding) {
+      throw new NotFoundException("Binding not found");
+    }
+
+    const provider = this.providers.getProvider(binding.providerId);
+    const connector = provider[input.target];
+
+    if (!connector) {
+      throw new BadRequestException(
+        `UNSUPPORTED_SCHOOL: ${input.target} sync is not available`,
+      );
+    }
+
+    const result = await connector.fetchByCredentials({
+      username: input.username,
+      password: input.password,
+      semesterId: input.semesterId,
+      providerConfig: this.getProviderConfig(binding.school.config),
+    });
+    const syncedAt = new Date();
+    const cache = await this.writeFeatureCache({
+      binding,
+      target: input.target,
+      result,
+      syncedAt,
+    });
+
+    await this.prisma.userSchoolBinding.update({
+      where: { id: binding.id },
+      data: {
+        displayName:
+          input.target === "profile" && result.profile?.name
+            ? result.profile.name
+            : undefined,
+        authState: this.toJson({
+          ...this.asRecord(binding.authState),
+          ...(input.target === "profile" ? { profile: result.data } : {}),
+          syncedBy: "server_session",
+          syncedAt: syncedAt.toISOString(),
+        }),
+        cacheState: this.toJson({
+          ...this.asRecord(binding.cacheState),
+          [input.target]: {
+            status: "cached",
+            termId: result.termId,
+            syncedAt: syncedAt.toISOString(),
+          },
+        }),
+        status: "cached_only",
+        lastCachedAt: syncedAt,
+        lastAuthErrorCode: null,
+        lastAuthErrorAt: null,
+      },
+    });
+
+    return {
+      bindingId: binding.id,
+      cacheId: cache.id,
+      termId: result.termId,
+      parsedCount: this.countFeatureItems(result.data),
+      syncedAt,
+    };
+  }
+
+  private async writeFeatureCache(input: {
+    binding: {
+      id: string;
+      userId: string;
+      schoolId: string;
+      providerId: string;
+    };
+    target: Exclude<DataTarget, "course">;
+    result: FeatureFetchResult;
+    syncedAt: Date;
+  }) {
+    const sourceHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          bindingId: input.binding.id,
+          providerId: input.binding.providerId,
+          target: input.target,
+          termId: input.result.termId,
+          data: input.result.data,
+        }),
+      )
+      .digest("hex");
+    const existingCache = await this.prisma.featureCache.findFirst({
+      where: {
+        bindingId: input.binding.id,
+        target: input.target,
+        sourceHash,
+      },
+      select: { id: true },
+    });
+    const data = {
+      termId: input.result.termId,
+      dataJson: this.toJson(input.result.data),
+      metaJson: this.toJson(input.result.meta ?? { source: "server_session" }),
+      syncedAt: input.syncedAt,
+    };
+
+    if (existingCache) {
+      return this.prisma.featureCache.update({
+        where: { id: existingCache.id },
+        data,
+      });
+    }
+
+    return this.prisma.featureCache.create({
+      data: {
+        userId: input.binding.userId,
+        bindingId: input.binding.id,
+        schoolId: input.binding.schoolId,
+        providerId: input.binding.providerId,
+        target: input.target,
+        sourceHash,
+        ...data,
+      },
+    });
+  }
+
+  private getFeatureResults(result: CourseFetchResult) {
+    const features = result.features ?? {};
+    const list: Array<{
+      target: Exclude<DataTarget, "course">;
+      result: FeatureFetchResult;
+    }> = [];
+
+    if (result.profile) {
+      list.push({
+        target: "profile",
+        result: {
+          data: result.profile,
+          profile: result.profile,
+          meta: { source: "course_fetch" },
+        },
+      });
+    }
+
+    for (const target of ["score", "exam", "profile"] as const) {
+      const data = features[target];
+
+      if (data === undefined || (target === "profile" && result.profile)) {
+        continue;
+      }
+
+      list.push({
+        target,
+        result: {
+          data,
+          profile:
+            target === "profile"
+              ? (data as FeatureFetchResult["profile"])
+              : undefined,
+          meta: { source: "course_fetch" },
+        },
+      });
+    }
+
+    return list;
+  }
+
+  private countFeatureItems(data: unknown) {
+    if (Array.isArray(data)) {
+      return data.length;
+    }
+
+    const record = this.asRecord(data);
+
+    if (Array.isArray(record.semesters)) {
+      return record.semesters.reduce((count, semester) => {
+        const grades = this.asRecord(semester).grades;
+        return count + (Array.isArray(grades) ? grades.length : 0);
+      }, 0);
+    }
+
+    return Object.keys(record).length;
   }
 
   private normalizeCourse(course: ProviderCourse, index: number) {
