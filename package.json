@@ -14,14 +14,6 @@
     "convert:schools": "ts-node prisma/convert-school-catalog.ts",
     "seed:schools": "ts-node prisma/seed-schools.ts"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@nestjs/core",
-      "@prisma/client",
-      "@prisma/engines",
-      "prisma"
-    ]
-  },
   "dependencies": {
     "@nestjs/common": "^10.4.5",
     "@nestjs/config": "^3.2.3",
