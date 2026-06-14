@@ -26,16 +26,22 @@ export class StudentIdentityService {
     const rawStudentNo = this.normalizeRawStudentNo(input.studentNo);
     const studentNo = this.normalizeStudentNo(rawStudentNo);
     const studentNoHash = studentNo
-      ? this.createStudentNoHash(input.schoolId, input.providerId, studentNo)
+      ? this.createStudentNoHash(input.schoolId, studentNo)
       : undefined;
 
     if (studentNoHash) {
       const existingBinding = await this.prisma.userSchoolBinding.findFirst({
         where: {
           schoolId: input.schoolId,
-          providerId: input.providerId,
           OR: [
             { studentNoHash },
+            {
+              studentNoHash: this.createLegacyProviderStudentNoHash(
+                input.schoolId,
+                input.providerId,
+                studentNo,
+              ),
+            },
             { studentNoEncrypted: this.maskStudentNo(rawStudentNo || studentNo) },
             { studentNoEncrypted: this.maskStudentNo(studentNo) },
           ],
@@ -101,15 +107,20 @@ export class StudentIdentityService {
 
     const studentNoHash = this.createStudentNoHash(
       input.schoolId,
-      input.providerId,
       studentNo,
     );
     const existingBinding = await this.prisma.userSchoolBinding.findFirst({
       where: {
         schoolId: input.schoolId,
-        providerId: input.providerId,
         OR: [
           { studentNoHash },
+          {
+            studentNoHash: this.createLegacyProviderStudentNoHash(
+              input.schoolId,
+              input.providerId,
+              studentNo,
+            ),
+          },
           { studentNoEncrypted: this.maskStudentNo(rawStudentNo || studentNo) },
           { studentNoEncrypted: this.maskStudentNo(studentNo) },
         ],
@@ -252,7 +263,17 @@ export class StudentIdentityService {
     return undefined;
   }
 
-  createStudentNoHash(schoolId: string, providerId: string, studentNo: string) {
+  createStudentNoHash(schoolId: string, studentNo: string) {
+    return createHash("sha256")
+      .update(`${schoolId}:${this.normalizeStudentNo(studentNo)}`)
+      .digest("hex");
+  }
+
+  private createLegacyProviderStudentNoHash(
+    schoolId: string,
+    providerId: string,
+    studentNo: string,
+  ) {
     return createHash("sha256")
       .update(`${schoolId}:${providerId}:${this.normalizeStudentNo(studentNo)}`)
       .digest("hex");
