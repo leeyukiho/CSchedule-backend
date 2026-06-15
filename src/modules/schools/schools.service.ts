@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common'
+import { Injectable, NotFoundException } from '@nestjs/common'
 
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { ProviderRegistryService } from '../providers/provider-registry.service'
@@ -44,7 +44,7 @@ export class SchoolsService {
       : undefined
 
     const statusFilter = enabledOnly
-      ? { enabled: true }
+      ? { enabled: true, status: 'enabled' as const }
       : undefined
 
     const combinedWhere = where && statusFilter
@@ -91,6 +91,8 @@ export class SchoolsService {
 
   async createLoginContext(schoolId: string): Promise<LoginContextResponse> {
     const school = await this.findSchool(schoolId)
+    this.assertSchoolAvailable(school)
+
     const loginMode = school.loginMode ?? 'direct_password'
     const authConfig = this.getAuthConfig(school.config)
     const credentialSave = this.getCredentialSaveCapability(
@@ -199,12 +201,12 @@ export class SchoolsService {
       }
     }
 
-    return {
-      id: schoolId,
-      name: schoolId,
-      enabled: false,
-      status: 'disabled',
-      capabilities: EMPTY_CAPABILITIES,
+    throw new NotFoundException('School not found')
+  }
+
+  private assertSchoolAvailable(school: SchoolCatalogSeed) {
+    if (!school.enabled || school.status !== 'enabled') {
+      throw new NotFoundException('School not available')
     }
   }
 
@@ -346,7 +348,7 @@ export class SchoolsService {
   }
 
   private getStatusMessage(enabled: boolean, status: string) {
-    if (enabled) {
+    if (enabled && status === 'enabled') {
       return undefined
     }
 

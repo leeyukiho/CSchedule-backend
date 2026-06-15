@@ -41,6 +41,8 @@ export class AuthService {
       throw new NotFoundException("School not found");
     }
 
+    this.assertSchoolAvailable(existingSchool);
+
     const loginMode = existingSchool.loginMode ?? "direct_password";
 
     if (!input.contextId) {
@@ -166,6 +168,8 @@ export class AuthService {
       throw new NotFoundException("School not found");
     }
 
+    this.assertSchoolAvailable(school);
+
     const account = input.accountId
       ? await this.prisma.studentAccount.findUnique({
           where: { id: input.accountId },
@@ -273,6 +277,12 @@ export class AuthService {
     }
 
     return "password_vault";
+  }
+
+  private assertSchoolAvailable(school: { enabled: boolean; status: string }) {
+    if (!school.enabled || school.status !== "enabled") {
+      throw new NotFoundException("School not available");
+    }
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

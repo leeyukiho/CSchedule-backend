@@ -84,8 +84,13 @@ export class AdminService {
     const data: Record<string, unknown> = {}
     if (input.name !== undefined) data.name = input.name
     if (input.shortName !== undefined) data.shortName = input.shortName
-    if (input.status !== undefined) data.status = input.status
-    if (input.enabled !== undefined) data.enabled = input.enabled
+    if (input.status !== undefined) {
+      data.status = input.status
+      data.enabled = input.status === 'enabled'
+    } else if (input.enabled !== undefined) {
+      data.enabled = input.enabled
+      data.status = input.enabled ? 'enabled' : 'disabled'
+    }
     if (input.loginMode !== undefined) data.loginMode = input.loginMode
     if (input.authUrl !== undefined) data.authUrl = input.authUrl
     if (input.homepageUrl !== undefined) data.homepageUrl = input.homepageUrl
@@ -133,7 +138,7 @@ export class AdminService {
     }
     const capabilities = input.capabilities ?? (school.capabilities as Record<string, boolean>) ?? {}
     const dataAccess = input.dataAccess ?? (school.dataAccess as Record<string, unknown>) ?? {}
-    const status = input.status ?? 'candidate'
+    const status = input.status ?? school.status
     const verifiedAt = input.verifiedAt ? new Date(input.verifiedAt) : undefined
 
     return this.prisma.school.update({
@@ -144,8 +149,8 @@ export class AdminService {
         dataAccess: this.toJson(dataAccess),
         capabilities: this.toJson(capabilities),
         eduSystemType: input.eduSystemType ?? school.eduSystemType,
-        status: status === 'enabled' ? 'enabled' : school.status,
-        enabled: status === 'enabled' ? true : school.enabled,
+        status,
+        enabled: status === 'enabled',
         ...(verifiedAt ? { verifiedAt } : {}),
         config: await this.mergeSchoolConfig(schoolId, {
           authConfig: input.authConfig,
@@ -229,7 +234,9 @@ export class AdminService {
     const [schoolCount, enabledCount, accountCount, submissionCount, feedbackCount] =
       await Promise.all([
         this.prisma.school.count(),
-        this.prisma.school.count({ where: { enabled: true } }),
+        this.prisma.school.count({
+          where: { enabled: true, status: 'enabled' },
+        }),
         this.prisma.studentAccount.count(),
         this.prisma.schoolAccessSubmission.count({ where: { status: 'submitted' } }),
         this.prisma.feedbackItem.count({ where: { status: 'pending' } }),

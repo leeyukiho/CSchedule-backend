@@ -6,7 +6,16 @@ loadEnvFile(path.resolve(__dirname, '../.env'))
 
 const prisma = new PrismaClient()
 const CATALOG_FILE = path.resolve(__dirname, './data/school-catalog.json')
-const EMPTY_CAPABILITIES = { course: false, score: false, exam: false, profile: false }
+const CONNECTED_SCHOOLS_FILE = path.resolve(
+  __dirname,
+  './data/connected-schools.json',
+)
+const EMPTY_CAPABILITIES = {
+  course: false,
+  score: false,
+  exam: false,
+  profile: false,
+}
 const EMPTY_DATA_ACCESS = { course: [], score: [], exam: [], profile: [] }
 const CONNECTED_SCHOOLS: ConnectedSchoolSeed[] = [
   {
@@ -49,7 +58,13 @@ const CONNECTED_SCHOOLS: ConnectedSchoolSeed[] = [
     shortName: '华夏理工',
     province: '湖北省',
     city: '武汉市',
-    aliases: ['武汉华夏理工学院', '华夏理工学院', '华夏理工', 'WHHXIT', 'whhxit'],
+    aliases: [
+      '武汉华夏理工学院',
+      '华夏理工学院',
+      '华夏理工',
+      'WHHXIT',
+      'whhxit',
+    ],
     providerId: 'whhxit',
     loginMode: 'direct_password',
     eduSystemType: 'zf_jwglxt',
@@ -73,6 +88,45 @@ const CONNECTED_SCHOOLS: ConnectedSchoolSeed[] = [
         captchaKind: 'none',
         uiPreset: 'password',
         passwordTransform: 'rsa_public_key',
+      },
+    },
+  },
+  {
+    id: 'whggvc',
+    catalogCode: '4142014591',
+    name: '武汉光谷职业学院',
+    shortName: '光谷职院',
+    province: '湖北省',
+    city: '武汉市',
+    aliases: ['武汉光谷职业学院', '光谷职院', 'WHGGVC', 'whggvc'],
+    providerId: 'whggvc',
+    loginMode: 'direct_password',
+    eduSystemType: 'custom',
+    homepageUrl: 'https://xs.whggvc.net/scloudapp/#/pages/login/login',
+    authUrl: 'https://xs.whggvc.net/scloudapp/#/pages/login/login',
+    verifiedAt: '2026-06-15T00:00:00.000Z',
+    capabilities: { course: true, score: true, exam: true, profile: true },
+    dataAccess: {
+      course: ['server_session'],
+      score: ['server_session'],
+      exam: ['server_session'],
+      profile: ['server_session'],
+    },
+    providerConfig: {
+      baseUrl: 'https://xs.whggvc.net',
+      appBasePath: '/scloudapp',
+      apiBaseUrl: 'https://xs.whggvc.net/scloudoa',
+      staticDomainUrl: 'https://xs.whggvc.net/scloudoa',
+      system: 'WHGGVC Smart Campus JSON API',
+      signAlgorithm: 'jeecg_md5_candidate',
+      authConfig: {
+        captchaRequired: false,
+        captchaKind: 'none',
+        uiPreset: 'password',
+        passwordTransform: 'plain',
+        signRequired: true,
+        tokenHeader: 'X-Access-Token',
+        signHeaders: ['X-Sign', 'X-TIMESTAMP'],
       },
     },
   },
@@ -103,11 +157,25 @@ interface ConnectedSchoolSeed {
   city: string
   aliases: string[]
   providerId: string
-  loginMode: 'direct_password'
+  loginMode:
+    | 'direct_password'
+    | 'password_captcha'
+    | 'cas_simple'
+    | 'cas_webview'
+    | 'oauth_webview'
+    | 'qrcode'
   eduSystemType: string
   homepageUrl: string
   authUrl: string
   verifiedAt: string
+  status?:
+    | 'catalog_only'
+    | 'candidate'
+    | 'researching'
+    | 'beta'
+    | 'enabled'
+    | 'disabled'
+  enabled?: boolean
   capabilities: typeof EMPTY_CAPABILITIES
   dataAccess: {
     course: string[]
@@ -141,7 +209,10 @@ function loadEnvFile(envFile: string) {
     }
 
     const key = trimmed.slice(0, separatorIndex).trim()
-    const value = trimmed.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, '')
+    const value = trimmed
+      .slice(separatorIndex + 1)
+      .trim()
+      .replace(/^["']|["']$/g, '')
 
     if (!process.env[key]) {
       process.env[key] = value
@@ -153,8 +224,30 @@ function readCatalogFile(): SchoolCatalogFile {
   return JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8')) as SchoolCatalogFile
 }
 
+function readConnectedSchoolsFile(): ConnectedSchoolSeed[] {
+  if (!fs.existsSync(CONNECTED_SCHOOLS_FILE)) {
+    return CONNECTED_SCHOOLS
+  }
+
+  const payload = JSON.parse(
+    fs.readFileSync(CONNECTED_SCHOOLS_FILE, 'utf8'),
+  ) as ConnectedSchoolSeed[] | { schools?: ConnectedSchoolSeed[] }
+  const schools = Array.isArray(payload) ? payload : payload.schools
+
+  if (!Array.isArray(schools)) {
+    throw new Error(`No connected schools found in ${CONNECTED_SCHOOLS_FILE}`)
+  }
+
+  return schools
+}
+
+function resolveSeedStatus(school: ConnectedSchoolSeed) {
+  return school.status ?? (school.enabled === false ? 'disabled' : 'enabled')
+}
+
 async function main() {
   const catalog = readCatalogFile()
+  const connectedSchools = readConnectedSchoolsFile()
 
   if (!Array.isArray(catalog.schools) || catalog.schools.length === 0) {
     throw new Error(`No schools found in ${CATALOG_FILE}`)
@@ -199,8 +292,11 @@ async function main() {
     })
   }
 
-  for (const school of CONNECTED_SCHOOLS) {
-    const catalogItem = catalog.schools.find((item) => item.code === school.catalogCode)
+  for (const school of connectedSchools) {
+    const catalogItem = catalog.schools.find(
+      (item) => item.code === school.catalogCode,
+    )
+    const status = resolveSeedStatus(school)
     const catalogConfig = {
       source: catalog.source,
       sourceDate: catalog.sourceDate,
@@ -226,8 +322,8 @@ async function main() {
         eduSystemType: school.eduSystemType,
         homepageUrl: school.homepageUrl,
         authUrl: school.authUrl,
-        enabled: true,
-        status: 'enabled',
+        enabled: status === 'enabled',
+        status,
         verifiedAt,
         config: toJson({
           catalog: catalogConfig,
@@ -250,8 +346,8 @@ async function main() {
         eduSystemType: school.eduSystemType,
         homepageUrl: school.homepageUrl,
         authUrl: school.authUrl,
-        enabled: true,
-        status: 'enabled',
+        enabled: status === 'enabled',
+        status,
         verifiedAt,
         config: toJson({
           catalog: catalogConfig,
@@ -264,7 +360,9 @@ async function main() {
     })
   }
 
-  console.log(`Seeded ${catalog.schools.length} catalog schools and ${CONNECTED_SCHOOLS.length} connected schools from ${CATALOG_FILE}`)
+  console.log(
+    `Seeded ${catalog.schools.length} catalog schools and ${connectedSchools.length} connected schools from ${CATALOG_FILE}`,
+  )
 }
 
 function createCredentialPolicy(capabilities: typeof EMPTY_CAPABILITIES) {
