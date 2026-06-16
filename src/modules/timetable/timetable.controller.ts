@@ -10,7 +10,8 @@ export class TimetableController {
   getTimetable(
     @Param('accountId') accountId: string,
     @Query('termId') termId?: string,
+    @Query('knownHash') knownHash?: string,
   ) {
-    return this.timetableService.getTimetable(accountId, termId)
+    return this.timetableService.getTimetable(accountId, termId, knownHash)
   }
 }

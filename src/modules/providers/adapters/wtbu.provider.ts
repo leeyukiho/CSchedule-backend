@@ -14,6 +14,7 @@ import {
   SchoolProvider,
 } from '../provider.types'
 import { createProviderHttpClient } from './provider-http'
+import { mapWithConcurrency } from '../shared/concurrency'
 import {
   cleanText,
   firstValue,
@@ -32,6 +33,7 @@ const DEFAULT_CONFIG = {
 const LOGIN_MAX_ATTEMPTS = 2
 const SCHEDULE_FETCH_MAX_ATTEMPTS = 3
 const WTBU_HISTORY_ACADEMIC_YEARS = 4
+const WTBU_HISTORY_FETCH_CONCURRENCY = 2
 const TERM_ID_PATTERN = /^(20\d{2})-?(20\d{2})-?([12])$/
 const WTBU_NUMERIC_TERM_ID_PATTERN = /^\d{2,3}$/
 
@@ -1903,8 +1905,10 @@ const wtbuCourseConnector: CourseConnector = {
       )
 
       const fetchedSchedules: Array<ProviderSchedule | null> =
-        await Promise.all(
-          historyTargets.map(async (semester) => {
+        await mapWithConcurrency(
+          historyTargets,
+          WTBU_HISTORY_FETCH_CONCURRENCY,
+          async (semester) => {
             const semesterId = semester.id
 
             try {
@@ -1920,7 +1924,7 @@ const wtbuCourseConnector: CourseConnector = {
             } catch {
               return null
             }
-          }),
+          },
         )
       const uniqueSchedules = new Map<string, ProviderSchedule>()
 
@@ -2041,10 +2045,10 @@ export const wtbuProvider: SchoolProvider = {
       consentLabel: '加密保存账号密码，用于一键更新课表',
     },
     dataAccess: {
-      course: ['server_session'],
-      score: ['server_session'],
-      exam: ['server_session'],
-      profile: ['server_session'],
+      course: ['server_session', 'webview_client_fetch', 'manual_import'],
+      score: ['server_session', 'webview_client_fetch', 'manual_import'],
+      exam: ['server_session', 'webview_client_fetch', 'manual_import'],
+      profile: ['server_session', 'webview_client_fetch', 'manual_import'],
     },
     featureDisplay: {
       course: {

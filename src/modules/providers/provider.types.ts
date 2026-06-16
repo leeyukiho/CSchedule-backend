@@ -145,6 +145,20 @@ export type AutoSyncCapability =
   | 'password_login'
   | 'password_login_may_need_verification'
 
+export type ImportMode = 'password_server' | 'webview_cloud' | 'manual_import'
+export type SyncMode = 'cloud_worker' | 'server_worker' | 'manual_webview'
+
+export interface SchoolSyncStrategy {
+  importMode: ImportMode
+  syncMode: SyncMode
+  cloudParserRequired: boolean
+  localCachePreferred: boolean
+  scheduledSyncSupported: boolean
+  passwordVaultRequired: boolean
+  manualSyncRequired: boolean
+  reason?: string
+}
+
 export interface CredentialSaveCapability {
   passwordVaultAllowed: boolean
   autoSync: AutoSyncCapability

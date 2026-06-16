@@ -1,11 +1,20 @@
 import { DataTarget } from '../providers/provider.types'
 
+export type LoginCacheData = Record<string, unknown>
+
 export interface LoginSubmitRequest {
   contextId: string
   username?: string
   password?: string
   captcha?: string
   credentialSaveMode?: 'none' | 'password_vault'
+  verifiedByCloud?: boolean
+  target?: DataTarget
+  cacheData?: LoginCacheData
+  parsedCount?: number
+  termId?: string
+  sourceHash?: string
+  cloudWarnings?: string[]
   extra?: Record<string, unknown>
 }
 

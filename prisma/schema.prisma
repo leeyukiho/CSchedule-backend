@@ -61,6 +61,7 @@ enum SyncStatus {
   failed
   need_login
   need_webview_fetch
+  rate_limited
   cancelled
 }
 
@@ -141,6 +142,8 @@ model CourseCache {
 
   @@index([accountId])
   @@index([schoolId])
+  @@index([accountId, termId, syncedAt])
+  @@unique([accountId, sourceHash], name: "courseCacheAccountSourceHash")
 }
 
 model FeatureCache {
@@ -160,6 +163,8 @@ model FeatureCache {
 
   @@index([accountId])
   @@index([target])
+  @@index([accountId, target, termId, syncedAt])
+  @@unique([accountId, target, sourceHash], name: "featureCacheAccountTargetSourceHash")
 }
 
 model SyncRecord {
@@ -178,6 +183,8 @@ model SyncRecord {
 
   @@index([accountId])
   @@index([status])
+  @@index([accountId, target, status, createdAt])
+  @@index([schoolId, target, status, createdAt])
 }
 
 model FeedbackItem {

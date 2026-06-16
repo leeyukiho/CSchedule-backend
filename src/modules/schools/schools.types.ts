@@ -6,6 +6,7 @@ import {
   ProviderCapabilities,
   ProviderDataAccess,
   ProviderStatus,
+  SchoolSyncStrategy,
 } from '../providers/provider.types'
 
 export type SchoolStatus =
@@ -27,10 +28,12 @@ export interface SchoolListItem {
   isPrivate?: boolean
   status: SchoolStatus
   enabled: boolean
+  providerId?: string
   loginMode?: LoginMode
   dataAccess?: ProviderDataAccess
   capabilities: ProviderCapabilities
   credentialSave?: CredentialSaveCapability
+  syncStrategy: SchoolSyncStrategy
   message?: string
 }
 
@@ -66,6 +69,7 @@ export interface LoginContextResponse {
     closeAfterCacheWritten: boolean
   }
   credentialSave?: CredentialSaveCapability
+  syncStrategy: SchoolSyncStrategy
   expireAt: string
 }
 

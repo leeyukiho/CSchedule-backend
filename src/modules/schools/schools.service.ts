@@ -11,7 +11,9 @@ import {
 } from './schools.types'
 import {
   CredentialSaveCapability,
+  DataTarget,
   ProviderAuthConfig,
+  SchoolSyncStrategy,
 } from '../providers/provider.types'
 
 @Injectable()
@@ -73,6 +75,7 @@ export class SchoolsService {
         ...this.getCatalogInfo(school.config),
         status: school.status,
         enabled: school.enabled,
+        providerId: school.providerId ?? undefined,
         loginMode: school.loginMode ?? undefined,
         dataAccess: this.asDataAccess(school.dataAccess),
         capabilities: this.asCapabilities(school.capabilities),
@@ -80,6 +83,12 @@ export class SchoolsService {
           school.providerId,
           school.config,
         ),
+        syncStrategy: this.getSchoolSyncStrategy({
+          providerId: school.providerId,
+          dataAccess: this.asDataAccess(school.dataAccess),
+          capabilities: this.asCapabilities(school.capabilities),
+          config: school.config,
+        }),
         message: this.getStatusMessage(school.enabled, school.status),
       })),
       total,
@@ -99,24 +108,25 @@ export class SchoolsService {
       school.providerId,
       school.config,
     )
+    const dataAccess = this.asDataAccess(school.dataAccess)
+    const capabilities = this.asCapabilities(school.capabilities)
+    const syncStrategy = this.getSchoolSyncStrategy({
+      providerId: school.providerId,
+      dataAccess,
+      capabilities,
+      config: school.config,
+    })
+    const webview = this.createFrontendWebviewDescriptor(school, authConfig)
     const expireAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
 
     if (loginMode === 'cas_webview' || loginMode === 'oauth_webview') {
-      const webview = authConfig?.webview
-
       return {
         contextId: this.createContextId(school.id),
         mode: loginMode,
         fields: [],
-        webview: {
-          url: school.authUrl || 'about:blank',
-          successUrlPatterns: webview?.successUrlPatterns || ['.*'],
-          failureUrlPatterns: webview?.failureUrlPatterns,
-          callbackMode: webview?.callbackMode || 'webview_client_fetch',
-          requiredFetchTargets: webview?.requiredFetchTargets || ['course'],
-          closeAfterCacheWritten: webview?.closeAfterCacheWritten ?? true,
-        },
+        webview,
         credentialSave,
+        syncStrategy,
         expireAt,
       }
     }
@@ -165,6 +175,7 @@ export class SchoolsService {
       contextId: this.createContextId(school.id),
       mode: loginMode,
       fields,
+      webview,
       captcha:
         loginMode === 'password_captcha' || authConfig?.captchaRequired
           ? {
@@ -174,8 +185,53 @@ export class SchoolsService {
             }
           : undefined,
       credentialSave,
+      syncStrategy,
       expireAt,
     }
+  }
+
+  private createFrontendWebviewDescriptor(
+    school: SchoolCatalogSeed,
+    authConfig?: ProviderAuthConfig,
+  ): LoginContextResponse['webview'] | undefined {
+    const webview = authConfig?.webview
+    const url = school.authUrl || webview?.url
+
+    if (!url) {
+      return undefined
+    }
+
+    return {
+      url,
+      successUrlPatterns: webview?.successUrlPatterns || ['.*'],
+      failureUrlPatterns: webview?.failureUrlPatterns,
+      callbackMode:
+        webview?.callbackMode === 'manual_confirm'
+          ? 'manual_confirm'
+          : 'webview_client_fetch',
+      requiredFetchTargets:
+        webview?.requiredFetchTargets || this.getInitialFetchTargets(school.capabilities),
+      closeAfterCacheWritten: webview?.closeAfterCacheWritten ?? true,
+    }
+  }
+
+  private getInitialFetchTargets(capabilities: unknown): DataTarget[] {
+    const source =
+      capabilities && typeof capabilities === 'object' && !Array.isArray(capabilities)
+        ? (capabilities as Partial<Record<DataTarget, unknown>>)
+        : {}
+
+    if (source.course) {
+      return ['course']
+    }
+
+    for (const target of ['profile', 'score', 'exam'] as DataTarget[]) {
+      if (source[target]) {
+        return [target]
+      }
+    }
+
+    return ['course']
   }
 
   private async findSchool(schoolId: string): Promise<SchoolCatalogSeed> {
@@ -302,6 +358,58 @@ export class SchoolsService {
     }
 
     return this.asCredentialSaveCapability(capability)
+  }
+
+  private getSchoolSyncStrategy(input: {
+    providerId?: string | null
+    dataAccess: ReturnType<SchoolsService['asDataAccess']>
+    capabilities: ReturnType<SchoolsService['asCapabilities']>
+    config: unknown
+  }): SchoolSyncStrategy {
+    const credentialSave = this.getCredentialSaveCapability(
+      input.providerId,
+      input.config,
+    )
+    const canSavePassword =
+      Boolean(credentialSave?.passwordVaultAllowed) &&
+      credentialSave?.autoSync === 'password_login'
+    const hasWebviewCourse = input.dataAccess.course.includes('webview_client_fetch')
+    const hasManualImport = input.dataAccess.course.includes('manual_import')
+    const supportsCourse = Boolean(input.capabilities.course)
+
+    if (supportsCourse && (hasWebviewCourse || canSavePassword)) {
+      return {
+        importMode: 'webview_cloud',
+        syncMode: canSavePassword ? 'cloud_worker' : 'manual_webview',
+        cloudParserRequired: true,
+        localCachePreferred: true,
+        scheduledSyncSupported: canSavePassword,
+        passwordVaultRequired: canSavePassword,
+        manualSyncRequired: !canSavePassword,
+        reason: canSavePassword
+          ? 'First import uses frontend fetch and cloud parsing; saved credentials are used only for later auto-sync.'
+          : 'WebView login requires user interaction and cannot be scheduled safely.',
+      }
+    }
+
+    return {
+      importMode: hasManualImport ? 'manual_import' : 'webview_cloud',
+      syncMode: 'manual_webview',
+      cloudParserRequired: true,
+      localCachePreferred: true,
+      scheduledSyncSupported: false,
+      passwordVaultRequired: false,
+      manualSyncRequired: true,
+      reason: 'This school is configured for manual import only.',
+    }
+  }
+
+  private getRegisteredProvider(providerId: string) {
+    try {
+      return this.providers.getProvider(providerId)
+    } catch {
+      return null
+    }
   }
 
   private asCredentialSaveCapability(

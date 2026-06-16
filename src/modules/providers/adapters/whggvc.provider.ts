@@ -14,6 +14,7 @@ import {
   ScoreConnector,
 } from '../provider.types'
 import { createProviderHttpClient } from './provider-http'
+import { mapWithConcurrency } from '../shared/concurrency'
 import { cleanText, firstValue, maskStudentId } from './text-utils'
 
 const DEFAULT_CONFIG = {
@@ -35,6 +36,8 @@ const DEFAULT_CONFIG = {
   signAlgorithm: 'jeecg_md5_candidate',
   signSecret: 'dd05f1c54d63749eda95f9fa6d49v442a',
 }
+const WHGGVC_WEEKLY_FETCH_CONCURRENCY = 4
+const WHGGVC_SCORE_FETCH_CONCURRENCY = 2
 
 type WhggvcConfig = typeof DEFAULT_CONFIG
 
@@ -525,15 +528,20 @@ async function fetchSchedule(
     throw new Error('WHGGVC current semester is missing')
   }
 
+  const weekNumbers = Array.from(
+    { length: context.totalWeeks },
+    (_, index) => index + 1,
+  )
   const [sectionTimes, weeklyCourses] = await Promise.all([
     fetchLessonTimes(client, config).catch(() => []),
-    Promise.all(
-      Array.from({ length: context.totalWeeks }, (_, index) =>
+    mapWithConcurrency(
+      weekNumbers,
+      WHGGVC_WEEKLY_FETCH_CONCURRENCY,
+      (week) =>
         fetchWeeklyCourses(client, config, {
           currentSemester,
-          week: index + 1,
+          week,
         }).catch(() => []),
-      ),
     ),
   ])
   const termTitle = context.termTitle || currentSemester
@@ -623,8 +631,10 @@ async function fetchScores(
         .slice(0, 1)
   const selectedTargets = targets.length ? targets : semesters.slice(0, 1)
 
-  const results = await Promise.all(
-    selectedTargets.map(async (semester, index) => {
+  const results = await mapWithConcurrency(
+    selectedTargets,
+    WHGGVC_SCORE_FETCH_CONCURRENCY,
+    async (semester, index) => {
       const [scoreResponse, summaryResponse] = await Promise.all([
         client.get(config.scorePath, {
           params: {
@@ -655,7 +665,7 @@ async function fetchScores(
         expanded: index === 0,
         grades,
       }
-    }),
+    },
   )
 
   return {
@@ -930,17 +940,17 @@ export const whggvcProvider: SchoolProvider = {
     credentialSave: {
       passwordVaultAllowed: true,
       autoSync: 'password_login_may_need_verification',
-      scheduledSyncSupported: true,
+      scheduledSyncSupported: false,
       title: '支持保存登录信息',
       notice:
         '保存账号密码后可用于课表、成绩、考试与资料同步。该校接口存在请求签名机制，首次接入后仍需用真实账号完成验收。',
       consentLabel: '加密保存账号密码，用于同步智慧校园数据',
     },
     dataAccess: {
-      course: ['server_session'],
-      score: ['server_session'],
-      exam: ['server_session'],
-      profile: ['server_session'],
+      course: ['server_session', 'webview_client_fetch', 'manual_import'],
+      score: ['server_session', 'webview_client_fetch', 'manual_import'],
+      exam: ['server_session', 'webview_client_fetch', 'manual_import'],
+      profile: ['server_session', 'webview_client_fetch', 'manual_import'],
     },
     featureDisplay: {
       course: {

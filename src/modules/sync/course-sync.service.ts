@@ -206,34 +206,32 @@ export class CourseSyncService {
       )
       .digest("hex");
 
-    const existingCache = await this.prisma.courseCache.findFirst({
-      where: { accountId: input.account.id, sourceHash },
-      select: { id: true },
+    const cache = await this.prisma.courseCache.upsert({
+      where: {
+        courseCacheAccountSourceHash: {
+          accountId: input.account.id,
+          sourceHash,
+        },
+      },
+      update: {
+        termId,
+        coursesJson: this.toJson(courses),
+        termsJson: this.toJson(input.terms),
+        sectionTimesJson: this.toJson(sectionTimes),
+        syncedAt: input.syncedAt,
+      },
+      create: {
+        accountId: input.account.id,
+        schoolId: input.account.schoolId,
+        providerId: input.account.providerId,
+        termId,
+        coursesJson: this.toJson(courses),
+        termsJson: this.toJson(input.terms),
+        sectionTimesJson: this.toJson(sectionTimes),
+        sourceHash,
+        syncedAt: input.syncedAt,
+      },
     });
-    const cache = existingCache
-      ? await this.prisma.courseCache.update({
-          where: { id: existingCache.id },
-          data: {
-            termId,
-            coursesJson: this.toJson(courses),
-            termsJson: this.toJson(input.terms),
-            sectionTimesJson: this.toJson(sectionTimes),
-            syncedAt: input.syncedAt,
-          },
-        })
-      : await this.prisma.courseCache.create({
-          data: {
-            accountId: input.account.id,
-            schoolId: input.account.schoolId,
-            providerId: input.account.providerId,
-            termId,
-            coursesJson: this.toJson(courses),
-            termsJson: this.toJson(input.terms),
-            sectionTimesJson: this.toJson(sectionTimes),
-            sourceHash,
-            syncedAt: input.syncedAt,
-          },
-        });
 
     return {
       cacheId: cache.id,
@@ -318,6 +316,113 @@ export class CourseSyncService {
     };
   }
 
+  async writeCloudCacheResult(input: {
+    accountId: string;
+    target: DataTarget;
+    cacheData: Record<string, unknown>;
+    credentialSaveMode?: "none" | "password_vault";
+    authStatePatch?: Record<string, unknown>;
+  }) {
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: input.accountId },
+      include: { school: true },
+    });
+
+    if (!account) {
+      throw new NotFoundException("Student account not found");
+    }
+
+    const termId =
+      typeof input.cacheData.termId === "string"
+        ? input.cacheData.termId
+        : undefined;
+    const syncedAt = new Date();
+
+    if (input.target === "course") {
+      const courses = Array.isArray(input.cacheData.courses)
+        ? input.cacheData.courses.map((course, index) =>
+            this.normalizeCourse(course, index),
+          )
+        : [];
+      const sourceHash = this.createCloudSourceHash({
+        accountId: account.id,
+        providerId: account.providerId,
+        target: input.target,
+        termId,
+        data: courses,
+      });
+      const cache = await this.prisma.courseCache.upsert({
+        where: {
+          courseCacheAccountSourceHash: {
+            accountId: account.id,
+            sourceHash,
+          },
+        },
+        update: {
+          termId,
+          coursesJson: this.toJson(courses),
+          termsJson: this.toJson(input.cacheData.terms ?? []),
+          sectionTimesJson: this.toJson(input.cacheData.sectionTimes ?? []),
+          syncedAt,
+        },
+        create: {
+          accountId: account.id,
+          schoolId: account.schoolId,
+          providerId: account.providerId,
+          termId,
+          coursesJson: this.toJson(courses),
+          termsJson: this.toJson(input.cacheData.terms ?? []),
+          sectionTimesJson: this.toJson(input.cacheData.sectionTimes ?? []),
+          sourceHash,
+          syncedAt,
+        },
+      });
+
+      await this.updateAccountCacheState(
+        account.id,
+        account.cacheState,
+        account.authState,
+        "course",
+        {
+          termId,
+          syncedAt,
+          count: courses.length,
+          credentialSaveMode: input.credentialSaveMode,
+          authStatePatch: input.authStatePatch,
+        },
+      );
+
+      return { cacheId: cache.id, parsedCount: courses.length, syncedAt };
+    }
+
+    const featureData = input.cacheData.data ?? null;
+    const cache = await this.writeFeatureCache({
+      account,
+      target: input.target as Exclude<DataTarget, "course">,
+      result: {
+        termId,
+        data: featureData,
+        meta: this.asRecord(input.cacheData.meta),
+      },
+      syncedAt,
+    });
+
+    await this.updateAccountCacheState(
+      account.id,
+      account.cacheState,
+      account.authState,
+      input.target,
+      {
+        termId,
+        syncedAt,
+        credentialSaveMode: input.credentialSaveMode,
+        authStatePatch: input.authStatePatch,
+      },
+    );
+
+    return { cacheId: cache.id, parsedCount: this.countFeatureItems(featureData), syncedAt };
+  }
+
   private async writeFeatureCache(input: {
     account: {
       id: string;
@@ -339,14 +444,6 @@ export class CourseSyncService {
         }),
       )
       .digest("hex");
-    const existingCache = await this.prisma.featureCache.findFirst({
-      where: {
-        accountId: input.account.id,
-        target: input.target,
-        sourceHash,
-      },
-      select: { id: true },
-    });
     const data = {
       termId: input.result.termId,
       dataJson: this.toJson(input.result.data),
@@ -354,15 +451,16 @@ export class CourseSyncService {
       syncedAt: input.syncedAt,
     };
 
-    if (existingCache) {
-      return this.prisma.featureCache.update({
-        where: { id: existingCache.id },
-        data,
-      });
-    }
-
-    return this.prisma.featureCache.create({
-      data: {
+    return this.prisma.featureCache.upsert({
+      where: {
+        featureCacheAccountTargetSourceHash: {
+          accountId: input.account.id,
+          target: input.target,
+          sourceHash,
+        },
+      },
+      update: data,
+      create: {
         accountId: input.account.id,
         schoolId: input.account.schoolId,
         providerId: input.account.providerId,
@@ -371,6 +469,64 @@ export class CourseSyncService {
         ...data,
       },
     });
+  }
+
+  private async updateAccountCacheState(
+    accountId: string,
+    cacheState: Prisma.JsonValue | null,
+    authState: Prisma.JsonValue | null,
+    target: DataTarget,
+    state: {
+      termId?: string;
+      syncedAt: Date;
+      count?: number;
+      credentialSaveMode?: "none" | "password_vault";
+      authStatePatch?: Record<string, unknown>;
+    },
+  ) {
+    await this.prisma.studentAccount.update({
+      where: { id: accountId },
+      data: {
+        status: "cached_only",
+        ...(state.authStatePatch
+          ? {
+              authState: this.toJson({
+                ...this.asRecord(authState),
+                ...state.authStatePatch,
+                syncedBy: "cloud_worker",
+                syncedAt: state.syncedAt.toISOString(),
+              }),
+            }
+          : {}),
+        cacheState: this.toJson({
+          ...this.asRecord(cacheState),
+          [target]: {
+            status: "cached",
+            termId: state.termId,
+            syncedAt: state.syncedAt.toISOString(),
+            ...(state.count !== undefined ? { count: state.count } : {}),
+          },
+        }),
+        ...(state.credentialSaveMode
+          ? { credentialSaveMode: state.credentialSaveMode }
+          : {}),
+        lastCachedAt: state.syncedAt,
+        lastAuthErrorCode: null,
+        lastAuthErrorAt: null,
+      },
+    });
+  }
+
+  private createCloudSourceHash(input: {
+    accountId: string;
+    providerId: string;
+    target: DataTarget;
+    termId?: string;
+    data: unknown;
+  }) {
+    return createHash("sha256")
+      .update(JSON.stringify(input))
+      .digest("hex");
   }
 
   private getFeatureResults(result: CourseFetchResult) {

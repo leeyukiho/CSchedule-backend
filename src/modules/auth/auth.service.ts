@@ -1,10 +1,7 @@
 import {
-  BadGatewayException,
   BadRequestException,
-  HttpException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 
@@ -12,21 +9,18 @@ import { CredentialVaultService } from "../../common/crypto/credential-vault.ser
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { StudentIdentityService } from "../accounts/student-identity.service";
 import { ProviderRegistryService } from "../providers/provider-registry.service";
+import { DataTarget } from "../providers/provider.types";
 import { CourseSyncService } from "../sync/course-sync.service";
 import { LoginSubmitRequest, LoginSubmitResponse } from "./auth.types";
-
-const INVALID_CREDENTIAL_PATTERN =
-  /\u5b66\u53f7\u6216\u5bc6\u7801\u9519\u8bef|\u7528\u6237\u540d\u6216\u5bc6\u7801\u9519\u8bef|\u8d26\u53f7\u6216\u5bc6\u7801\u9519\u8bef|\u7528\u6237\u4e0d\u5b58\u5728|invalid credentials?/i;
-const LOGIN_SYNC_MAX_ATTEMPTS = 3;
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly courseSync: CourseSyncService,
     private readonly studentIdentity: StudentIdentityService,
     private readonly providers: ProviderRegistryService,
     private readonly credentialVault: CredentialVaultService,
+    private readonly courseSync: CourseSyncService,
   ) {}
 
   async submitLogin(
@@ -43,22 +37,30 @@ export class AuthService {
 
     this.assertSchoolAvailable(existingSchool);
 
-    const loginMode = existingSchool.loginMode ?? "direct_password";
-
     if (!input.contextId) {
       throw new BadRequestException("contextId is required");
     }
 
-    if (loginMode !== "cas_webview" && !input.username) {
-      throw new BadRequestException("username is required");
-    }
-
-    if (loginMode !== "cas_webview" && !input.password) {
-      throw new BadRequestException("password is required");
-    }
-
     const providerId = existingSchool.providerId ?? schoolId;
+    const loginMode = existingSchool.loginMode ?? "direct_password";
     const credentialSaveMode = this.getCredentialSaveMode(providerId, input);
+    const target = input.target ?? "course";
+
+    if (
+      credentialSaveMode === "password_vault" &&
+      (!input.username || !input.password || !input.verifiedByCloud)
+    ) {
+      throw new BadRequestException(
+        "verified username and password are required when saving credentials",
+      );
+    }
+
+    if (input.verifiedByCloud && !input.cacheData) {
+      throw new BadRequestException(
+        "cacheData is required when cloud verification succeeds",
+      );
+    }
+
     const authStatePatch =
       credentialSaveMode === "password_vault" && input.username && input.password
         ? {
@@ -70,90 +72,65 @@ export class AuthService {
             },
           }
         : undefined;
+    const authState = this.toJson({
+      contextId: input.contextId,
+      loginMode,
+      frontendFirst: true,
+      cloudVerified: Boolean(input.verifiedByCloud),
+      cloudVerifiedAt: input.verifiedByCloud ? new Date().toISOString() : undefined,
+      cloudWarnings: input.cloudWarnings,
+      ...(authStatePatch || {}),
+    });
     const account = await this.studentIdentity.findOrCreateAccount({
       schoolId,
       providerId,
       studentNo: input.username,
       data: {
         status: "need_login",
-        authState: this.toJson({
-          contextId: input.contextId,
-          loginMode,
-          ...(authStatePatch || {}),
-        }),
+        authState,
         cacheState: {},
         sessionReusable: false,
         sessionRefreshable: false,
         credentialSaveMode,
         lastLoginAt: new Date(),
+        lastAuthErrorCode: null,
+        lastAuthErrorAt: null,
       },
     });
 
-    if (loginMode === "cas_webview") {
-      return {
+    if (input.verifiedByCloud && input.cacheData) {
+      const cache = await this.courseSync.writeCloudCacheResult({
         accountId: account.id,
-        status: "need_webview_fetch",
-        sessionReusable: false,
-        requiredFetchTargets: ["course"],
-      };
-    }
-
-    try {
-      let latestError: unknown;
-
-      for (let attempt = 1; attempt <= LOGIN_SYNC_MAX_ATTEMPTS; attempt += 1) {
-        try {
-          const cache = await this.courseSync.fetchAndCacheByCredentials({
-            accountId: account.id,
-            username: input.username || "",
-            password: input.password || "",
-            semesterId:
-              typeof input.extra?.semesterId === "string"
-                ? input.extra.semesterId
-                : undefined,
-            allSemesters: true,
-            credentialSaveMode,
-            authStatePatch,
-          });
-
-          return {
-            accountId: cache.accountId,
-            status: "cached",
-            sessionReusable: false,
-            requiredFetchTargets: [],
-            cacheId: cache.cacheId,
-            parsedCount: cache.parsedCount,
-          };
-        } catch (error) {
-          latestError = error;
-
-          if (this.isInvalidCredentialError(error)) {
-            throw error;
-          }
-
-          if (attempt < LOGIN_SYNC_MAX_ATTEMPTS) {
-            await this.sleep(700);
-          }
-        }
-      }
-
-      throw latestError;
-    } catch (error) {
-      const authErrorCode = this.isInvalidCredentialError(error)
-        ? "INVALID_CREDENTIAL"
-        : "SYNC_FAILED";
-
-      await this.prisma.studentAccount.update({
-        where: { id: account.id },
-        data: {
-          status: "need_login",
-          lastAuthErrorCode: authErrorCode,
-          lastAuthErrorAt: new Date(),
+        target,
+        cacheData: input.cacheData,
+        credentialSaveMode,
+        authStatePatch: {
+          ...this.asRecord(account.authState),
+          ...this.asRecord(authState),
+          cloudVerified: true,
+          cloudVerifiedAt: new Date().toISOString(),
+          cloudWarnings: input.cloudWarnings,
         },
       });
 
-      throw this.toSyncException(error);
+      return {
+        accountId: account.id,
+        status: "cached",
+        sessionReusable: false,
+        requiredFetchTargets: [],
+        cacheId: cache.cacheId,
+        parsedCount: input.parsedCount ?? cache.parsedCount,
+      };
     }
+
+    return {
+      accountId: account.id,
+      status: "need_webview_fetch",
+      sessionReusable: false,
+      requiredFetchTargets: this.getRequiredFetchTargets(
+        existingSchool.capabilities,
+      ),
+    };
   }
 
   async importSession(
@@ -230,36 +207,6 @@ export class AuthService {
     });
   }
 
-  private toSyncException(error: unknown) {
-    if (error instanceof HttpException) {
-      return error;
-    }
-
-    const message = error instanceof Error ? error.message : "";
-
-    if (this.isInvalidCredentialError(error)) {
-      return new UnauthorizedException(
-        message || "\u5b66\u53f7\u6216\u5bc6\u7801\u9519\u8bef",
-      );
-    }
-
-    return new BadGatewayException(
-      message
-        ? `\u6559\u52a1\u7cfb\u7edf\u6570\u636e\u540c\u6b65\u5931\u8d25\uff1a${message}`
-        : "\u6559\u52a1\u7cfb\u7edf\u6682\u65f6\u65e0\u6cd5\u8bbf\u95ee",
-    );
-  }
-
-  private sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private isInvalidCredentialError(error: unknown) {
-    const message = error instanceof Error ? error.message : "";
-
-    return INVALID_CREDENTIAL_PATTERN.test(message);
-  }
-
   private getCredentialSaveMode(
     providerId: string,
     input: LoginSubmitRequest,
@@ -279,6 +226,25 @@ export class AuthService {
     return "password_vault";
   }
 
+  private getRequiredFetchTargets(capabilities: unknown): DataTarget[] {
+    const source =
+      capabilities && typeof capabilities === "object" && !Array.isArray(capabilities)
+        ? (capabilities as Partial<Record<DataTarget, unknown>>)
+        : {};
+
+    if (source.course) {
+      return ["course"];
+    }
+
+    for (const target of ["profile", "score", "exam"] as DataTarget[]) {
+      if (source[target]) {
+        return [target];
+      }
+    }
+
+    return ["course"];
+  }
+
   private assertSchoolAvailable(school: { enabled: boolean; status: string }) {
     if (!school.enabled || school.status !== "enabled") {
       throw new NotFoundException("School not available");
@@ -289,19 +255,9 @@ export class AuthService {
     return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
   }
 
-  private toLoginException(error: unknown) {
-    if (error instanceof HttpException) {
-      return error;
-    }
-
-    const message = error instanceof Error ? error.message : "";
-
-    if (/学号|密码|credential|login/i.test(message)) {
-      return new UnauthorizedException(message || "学号或密码错误");
-    }
-
-    return new BadGatewayException(
-      message ? `教务系统登录失败：${message}` : "教务系统暂时无法访问",
-    );
+  private asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
   }
 }

@@ -16,6 +16,8 @@ export interface TimetableCacheResponse {
   terms: unknown[]
   sectionTimes: unknown[]
   display?: FeatureDisplayConfig
+  sourceHash?: string
+  notModified?: boolean
   syncedAt?: string
   session: AccountSessionSummary
 }

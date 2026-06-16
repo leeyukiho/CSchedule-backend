@@ -34,10 +34,10 @@ const CONNECTED_SCHOOLS: ConnectedSchoolSeed[] = [
     verifiedAt: '2026-06-12T00:00:00.000Z',
     capabilities: { course: true, score: true, exam: true, profile: true },
     dataAccess: {
-      course: ['server_session'],
-      score: ['server_session'],
-      exam: ['server_session'],
-      profile: ['server_session'],
+      course: ['server_session', 'webview_client_fetch', 'manual_import'],
+      score: ['server_session', 'webview_client_fetch', 'manual_import'],
+      exam: ['server_session', 'webview_client_fetch', 'manual_import'],
+      profile: ['server_session', 'webview_client_fetch', 'manual_import'],
     },
     providerConfig: {
       baseUrl: 'https://jxgl.wtbu.edu.cn',
@@ -107,10 +107,10 @@ const CONNECTED_SCHOOLS: ConnectedSchoolSeed[] = [
     verifiedAt: '2026-06-15T00:00:00.000Z',
     capabilities: { course: true, score: true, exam: true, profile: true },
     dataAccess: {
-      course: ['server_session'],
-      score: ['server_session'],
-      exam: ['server_session'],
-      profile: ['server_session'],
+      course: ['server_session', 'webview_client_fetch', 'manual_import'],
+      score: ['server_session', 'webview_client_fetch', 'manual_import'],
+      exam: ['server_session', 'webview_client_fetch', 'manual_import'],
+      profile: ['server_session', 'webview_client_fetch', 'manual_import'],
     },
     providerConfig: {
       baseUrl: 'https://xs.whggvc.net',

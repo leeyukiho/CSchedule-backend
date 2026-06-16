@@ -31,7 +31,12 @@ export class FeaturesService {
     private readonly providerDisplay: ProviderDisplayService,
   ) {}
 
-  async getFeature(accountId: string, target: Exclude<DataTarget, 'course'>, termId?: string) {
+  async getFeature(
+    accountId: string,
+    target: Exclude<DataTarget, 'course'>,
+    termId?: string,
+    knownHash?: string,
+  ) {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
       include: { school: true },
@@ -50,10 +55,34 @@ export class FeaturesService {
       orderBy: { syncedAt: 'desc' },
     })
 
+    const display = this.providerDisplay.getDisplay(account.school.config, account.providerId, target)
+    const session = {
+      sessionReusable: account.sessionReusable,
+      sessionRefreshable: account.sessionRefreshable,
+      sessionExpireAt: account.sessionExpireAt?.toISOString(),
+      accountStatus: account.status,
+    }
+
+    if (cache?.sourceHash && knownHash && knownHash === cache.sourceHash) {
+      return {
+        accountId,
+        schoolId: account.schoolId,
+        providerId: account.providerId,
+        target,
+        termId: cache.termId ?? termId,
+        data: null,
+        meta: null,
+        display,
+        sourceHash: cache.sourceHash,
+        notModified: true,
+        syncedAt: cache.syncedAt.toISOString(),
+        session,
+      }
+    }
+
     const data =
       cache?.dataJson ??
       (target === 'profile' ? this.getAuthStateProfile(account.authState) : null)
-    const display = this.providerDisplay.getDisplay(account.school.config, account.providerId, target)
 
     return {
       accountId,
@@ -64,13 +93,9 @@ export class FeaturesService {
       data,
       meta: cache?.metaJson ?? null,
       display,
+      sourceHash: cache?.sourceHash,
       syncedAt: cache?.syncedAt.toISOString(),
-      session: {
-        sessionReusable: account.sessionReusable,
-        sessionRefreshable: account.sessionRefreshable,
-        sessionExpireAt: account.sessionExpireAt?.toISOString(),
-        accountStatus: account.status,
-      },
+      session,
     }
   }
 
@@ -112,34 +137,30 @@ export class FeaturesService {
       )
       .digest('hex')
 
-    const sameCache = await this.prisma.featureCache.findFirst({
-      where: { accountId, target: 'profile', sourceHash },
-      select: { id: true },
-    })
-
-    if (sameCache) {
-      await this.prisma.featureCache.update({
-        where: { id: sameCache.id },
-        data: {
-          dataJson: this.toJson(savedProfile),
-          metaJson: this.toJson({ source: 'manual_edit', editedAt: syncedAt.toISOString() }),
-          syncedAt,
-        },
-      })
-    } else {
-      await this.prisma.featureCache.create({
-        data: {
+    await this.prisma.featureCache.upsert({
+      where: {
+        featureCacheAccountTargetSourceHash: {
           accountId,
-          schoolId: account.schoolId,
-          providerId: account.providerId,
           target: 'profile',
-          dataJson: this.toJson(savedProfile),
-          metaJson: this.toJson({ source: 'manual_edit', editedAt: syncedAt.toISOString() }),
           sourceHash,
-          syncedAt,
         },
-      })
-    }
+      },
+      update: {
+        dataJson: this.toJson(savedProfile),
+        metaJson: this.toJson({ source: 'manual_edit', editedAt: syncedAt.toISOString() }),
+        syncedAt,
+      },
+      create: {
+        accountId,
+        schoolId: account.schoolId,
+        providerId: account.providerId,
+        target: 'profile',
+        dataJson: this.toJson(savedProfile),
+        metaJson: this.toJson({ source: 'manual_edit', editedAt: syncedAt.toISOString() }),
+        sourceHash,
+        syncedAt,
+      },
+    })
 
     await this.prisma.studentAccount.update({
       where: { id: accountId },

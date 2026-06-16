@@ -1,16 +1,28 @@
-import { Body, Controller, Param, Post } from '@nestjs/common'
+import { Body, Controller, Param, Post, UsePipes, ValidationPipe } from '@nestjs/common'
 
-import { DataTarget } from '../providers/provider.types'
-import { RawDataService, RawDataUploadRequest } from './raw-data.service'
+import { RawDataService } from './raw-data.service'
+import {
+  CompleteWebviewSyncDto,
+  RawCourseUploadDto,
+  RawDataUploadDto,
+} from './raw-data.dto'
 
 @Controller('account/:accountId')
+@UsePipes(
+  new ValidationPipe({
+    whitelist: true,
+    transform: true,
+    forbidNonWhitelisted: true,
+    forbidUnknownValues: false,
+  }),
+)
 export class RawDataController {
   constructor(private readonly rawDataService: RawDataService) {}
 
   @Post('raw-data')
   uploadRawData(
     @Param('accountId') accountId: string,
-    @Body() input: RawDataUploadRequest,
+    @Body() input: RawDataUploadDto,
   ) {
     return this.rawDataService.uploadRawData(accountId, input)
   }
@@ -18,7 +30,7 @@ export class RawDataController {
   @Post('raw-course')
   uploadRawCourse(
     @Param('accountId') accountId: string,
-    @Body() input: Omit<RawDataUploadRequest, 'target'>,
+    @Body() input: RawCourseUploadDto,
   ) {
     return this.rawDataService.uploadRawData(accountId, {
       ...input,
@@ -29,7 +41,7 @@ export class RawDataController {
   @Post('webview-sync/complete')
   completeWebviewSync(
     @Param('accountId') accountId: string,
-    @Body() input: { completedTargets?: DataTarget[] },
+    @Body() input: CompleteWebviewSyncDto,
   ) {
     return this.rawDataService.completeWebviewSync(accountId, input.completedTargets)
   }

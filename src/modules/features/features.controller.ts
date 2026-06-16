@@ -7,18 +7,29 @@ export class FeaturesController {
   constructor(private readonly featuresService: FeaturesService) {}
 
   @Get('scores')
-  getScores(@Param('accountId') accountId: string, @Query('termId') termId?: string) {
-    return this.featuresService.getFeature(accountId, 'score', termId)
+  getScores(
+    @Param('accountId') accountId: string,
+    @Query('termId') termId?: string,
+    @Query('knownHash') knownHash?: string,
+  ) {
+    return this.featuresService.getFeature(accountId, 'score', termId, knownHash)
   }
 
   @Get('exams')
-  getExams(@Param('accountId') accountId: string, @Query('termId') termId?: string) {
-    return this.featuresService.getFeature(accountId, 'exam', termId)
+  getExams(
+    @Param('accountId') accountId: string,
+    @Query('termId') termId?: string,
+    @Query('knownHash') knownHash?: string,
+  ) {
+    return this.featuresService.getFeature(accountId, 'exam', termId, knownHash)
   }
 
   @Get('profile')
-  getProfile(@Param('accountId') accountId: string) {
-    return this.featuresService.getFeature(accountId, 'profile')
+  getProfile(
+    @Param('accountId') accountId: string,
+    @Query('knownHash') knownHash?: string,
+  ) {
+    return this.featuresService.getFeature(accountId, 'profile', undefined, knownHash)
   }
 
   @Post('profile')
