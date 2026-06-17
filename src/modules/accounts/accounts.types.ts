@@ -1,4 +1,5 @@
 import { AccountStatus } from '../providers/provider.types'
+import { SchoolSyncStrategy } from '../providers/provider.types'
 
 export interface StudentAccountSummary {
   id: string
@@ -12,6 +13,7 @@ export interface StudentAccountSummary {
   sessionExpireAt?: string
   lastLoginAt?: string
   lastCachedAt?: string
+  syncStrategy?: SchoolSyncStrategy
   school?: {
     id: string
     name: string

@@ -45,7 +45,7 @@ export class TimetableService {
         accountId,
         schoolId: account.schoolId,
         providerId: account.providerId,
-        termId: cache.termId ?? termId,
+        termId: this.cleanTermLabel(cache.termId ?? termId),
         courses: [],
         terms: [],
         sectionTimes: [],
@@ -74,7 +74,7 @@ export class TimetableService {
       providerId: account.providerId,
       termId: canonicalTermId,
       courses: this.asArray(cache?.coursesJson),
-      terms,
+      terms: terms.map((term) => this.cleanTermRecord(term)),
       sectionTimes: this.asArray(cache?.sectionTimesJson),
       display,
       sourceHash: cache?.sourceHash,
@@ -136,7 +136,7 @@ export class TimetableService {
   }
 
   private getCanonicalTermId(termId: string | null | undefined, terms: unknown[]) {
-    const id = typeof termId === 'string' ? termId.trim() : ''
+    const id = this.cleanTermLabel(termId)
 
     if (!id) {
       return id
@@ -149,7 +149,7 @@ export class TimetableService {
     const key = this.getTermKey({ id, label: id, title: id })
     const canonicalTerm = terms.find((term) => this.getTermKey(term) === key)
 
-    return this.getTermId(canonicalTerm) || id
+    return this.cleanTermLabel(this.getTermId(canonicalTerm) || id)
   }
 
   private setMergedTerm(
@@ -159,19 +159,21 @@ export class TimetableService {
     id: string,
     term: unknown,
   ) {
-    const key = this.getTermKey(term)
+    const cleanId = this.cleanTermLabel(id)
+    const cleanTerm = this.cleanTermRecord({ ...this.asRecord(term), id: cleanId || id })
+    const key = this.getTermKey(cleanTerm)
     const existingId = canonicalIds.get(key)
 
     if (existingId) {
-      terms.set(existingId, this.mergeTermRecords(terms.get(existingId), term))
+      terms.set(existingId, this.mergeTermRecords(terms.get(existingId), cleanTerm))
       aliases.set(id, existingId)
       return
     }
 
-    if (!terms.has(id)) {
-      terms.set(id, term)
-      canonicalIds.set(key, id)
-      aliases.set(id, id)
+    if (cleanId && !terms.has(cleanId)) {
+      terms.set(cleanId, cleanTerm)
+      canonicalIds.set(key, cleanId)
+      aliases.set(id, cleanId)
     }
   }
 
@@ -181,13 +183,26 @@ export class TimetableService {
 
     return {
       ...existingRecord,
+      ...this.cleanTermRecord(nextRecord),
       selected: Boolean(existingRecord.selected || nextRecord.selected),
+    }
+  }
+
+  private cleanTermRecord(value: unknown) {
+    const record = this.asRecord(value)
+    const id = this.cleanTermLabel(record.id)
+    const label = this.cleanTermLabel(record.label ?? record.title ?? record.name ?? record.id)
+
+    return {
+      ...record,
+      ...(id ? { id } : {}),
+      ...(label ? { label, title: label } : {}),
     }
   }
 
   private getTermKey(value: unknown) {
     const record = this.asRecord(value)
-    const text = String(record.label ?? record.title ?? record.name ?? record.id ?? '')
+    const text = this.cleanTermLabel(record.label ?? record.title ?? record.name ?? record.id)
       .replace(/\s+/g, '')
       .trim()
     const yearMatch = text.match(/(20\d{2})[-~—至]?(20\d{2})/)
@@ -203,6 +218,48 @@ export class TimetableService {
       /[.-]?2$/.test(text)
 
     return `${yearMatch[1]}-${yearMatch[2]}-${secondSemester ? '2' : '1'}`
+  }
+
+  private cleanTermLabel(value: unknown) {
+    const text = String(value ?? '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const academicLabel = this.getAcademicTermLabel(text)
+
+    if (academicLabel) {
+      return academicLabel
+    }
+
+    return text
+      .replace(/\s*学生课表\s*/g, ' ')
+      .replace(/\s*第\s*[\d一二三四五六七八九十]+\s*周\s*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  private getAcademicTermLabel(value: string) {
+    const text = value.replace(/\s+/g, ' ').trim()
+    const compactText = text.replace(/\s+/g, '')
+    const patterns = [
+      /(20\d{2})\s*[-~—至]\s*(20\d{2})\s*学年\s*第?\s*([一二两12])\s*学期/,
+      /(20\d{2})\s*[-~—至]\s*(20\d{2})[\s_-]*第?\s*([一二两12])\s*学期/,
+      /(20\d{2})\s*[-~—至]\s*(20\d{2})[\s._-]+([12])(?:\s*学期)?/,
+      /(20\d{2})\s*[-~—至]\s*(20\d{2}).*?([上下])\s*学期/,
+    ]
+
+    for (const source of [text, compactText]) {
+      for (const pattern of patterns) {
+        const match = source.match(pattern)
+
+        if (match) {
+          const semester = match[3] === '2' || match[3] === '二' || match[3] === '两' || match[3] === '下' ? '2' : '1'
+          return `${match[1]}-${match[2]}学年第${semester}学期`
+        }
+      }
+    }
+
+    return ''
   }
 
   private getTermSortKey(value: unknown) {

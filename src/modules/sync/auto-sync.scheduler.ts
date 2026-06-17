@@ -128,7 +128,7 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
       return (
         provider.meta.credentialSave?.autoSync === 'password_login' &&
         this.asDataAccessTarget(dataAccess, target).includes('cloud_worker') &&
-        this.cloudSync.isTargetConfigured(config, target)
+        this.cloudSync.canRunTarget(config, target)
       )
     } catch {
       return false

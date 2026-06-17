@@ -612,6 +612,13 @@ export class SyncService {
         }
       }
 
+      if (!this.cloudSync.canRunTarget(input.schoolConfig, input.target)) {
+        return {
+          supported: false,
+          reason: 'Cloud sync environment is not configured for this data target',
+        }
+      }
+
       return { supported: true, reason: '' }
     } catch {
       return {

@@ -12,7 +12,6 @@ const EDITABLE_PROFILE_FIELDS = [
   'grade',
   'level',
   'className',
-  'gender',
   'birthDate',
   'politicalStatus',
   'phone',
@@ -187,6 +186,10 @@ export class FeaturesService {
     const editableFields = this.getEditableProfileFields(display)
 
     return editableFields.reduce<Record<string, string>>((result, field) => {
+      if (!Object.prototype.hasOwnProperty.call(profile, field)) {
+        return result
+      }
+
       const value = profile[field]
 
       if (value === null || value === undefined) {
@@ -212,6 +215,7 @@ export class FeaturesService {
       .filter((field) => field.visible !== false && field.editable !== false)
       .map((field) => field.key)
       .filter((field) => field && field !== 'studentId' && field !== 'maskedStudentId')
+      .filter((field) => field !== 'gender')
   }
 
   private getAuthStateProfile(authState: Prisma.JsonValue | null) {

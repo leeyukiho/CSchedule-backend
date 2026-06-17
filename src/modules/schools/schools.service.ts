@@ -382,6 +382,7 @@ export class SchoolsService {
     const hasCloudCourse =
       input.dataAccess.course.includes('cloud_worker') &&
       Boolean(cloudFunctions.course)
+    const canRunCloudCourse = this.cloudSync.canRunTarget(input.config, 'course')
 
     if (supportsCourse && canSavePassword && hasCloudCourse) {
       return {
@@ -390,11 +391,13 @@ export class SchoolsService {
         ...(Object.keys(cloudFunctions).length ? { cloudFunctions } : {}),
         cloudParserRequired: false,
         localCachePreferred: false,
-        scheduledSyncSupported: true,
+        scheduledSyncSupported: canRunCloudCourse,
         passwordVaultRequired: false,
         passwordVaultOptional: true,
-        manualSyncRequired: false,
-        reason: 'This school uses cloud functions for username/password import and scheduled sync.',
+        manualSyncRequired: !canRunCloudCourse,
+        reason: canRunCloudCourse
+          ? 'This school uses cloud functions for username/password import and scheduled sync.'
+          : 'Cloud sync is configured, but the backend CloudBase environment is not available.',
       }
     }
 

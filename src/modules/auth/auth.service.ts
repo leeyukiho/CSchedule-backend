@@ -134,10 +134,6 @@ export class AuthService {
       const primary =
         writtenCaches.find((item) => item.input.target === "course") ??
         writtenCaches[0];
-      const normalizedResults = cloudCacheResults.map((item) => ({
-        ...item,
-        cacheData: this.withAccountId(item.cacheData, account.id),
-      }));
 
       return {
         accountId: account.id,
@@ -145,11 +141,7 @@ export class AuthService {
         sessionReusable: false,
         requiredFetchTargets: [],
         cacheId: primary?.cache.cacheId,
-        parsedCount:
-          input.parsedCount ??
-          primary?.input.parsedCount ??
-          primary?.cache.parsedCount,
-        cacheResults: normalizedResults,
+        parsedCount: primary?.input.parsedCount ?? primary?.cache.parsedCount,
         savedTargets: writtenCaches.map((item) => item.input.target),
       };
     }
@@ -315,24 +307,37 @@ export class AuthService {
 
   private getCloudCacheResults(input: LoginSubmitRequest): LoginCacheResult[] {
     if (Array.isArray(input.cacheResults) && input.cacheResults.length > 0) {
-      return input.cacheResults.filter((item) => {
-        return Boolean(
-          item &&
+      return input.cacheResults.flatMap((item) => {
+        if (
+          !(
+            item &&
             ["course", "score", "exam", "profile"].includes(item.target) &&
             item.cacheData &&
             typeof item.cacheData === "object" &&
-            !Array.isArray(item.cacheData),
-        );
+            !Array.isArray(item.cacheData)
+          )
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            ...item,
+            cacheData: this.withCacheResultMeta(item),
+          },
+        ];
       });
     }
 
     return [];
   }
 
-  private withAccountId(cacheData: LoginCacheData, accountId: string) {
+  private withCacheResultMeta(cacheResult: LoginCacheResult): LoginCacheData {
     return {
-      ...cacheData,
-      accountId,
+      ...cacheResult.cacheData,
+      ...(cacheResult.termId ? { termId: cacheResult.termId } : {}),
+      ...(cacheResult.sourceHash ? { sourceHash: cacheResult.sourceHash } : {}),
+      ...(cacheResult.syncedAt ? { syncedAt: cacheResult.syncedAt } : {}),
     };
   }
 

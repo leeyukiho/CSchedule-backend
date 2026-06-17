@@ -8,6 +8,7 @@ export interface LoginCacheResult {
   parsedCount?: number
   termId?: string
   sourceHash?: string
+  syncedAt?: string
   warnings?: string[]
 }
 
@@ -20,9 +21,6 @@ export interface LoginSubmitRequest {
   credentialSaveMode?: 'none' | 'password_vault'
   verifiedByCloud?: boolean
   cacheResults?: LoginCacheResult[]
-  parsedCount?: number
-  termId?: string
-  sourceHash?: string
   cloudWarnings?: string[]
   extra?: Record<string, unknown>
 }
@@ -36,6 +34,5 @@ export interface LoginSubmitResponse {
   requiredFetchTargets?: DataTarget[]
   cacheId?: string
   parsedCount?: number
-  cacheResults?: LoginCacheResult[]
   savedTargets?: DataTarget[]
 }

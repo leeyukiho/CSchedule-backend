@@ -13,6 +13,7 @@ export interface CloudCredentialCacheResult {
   cacheData: Record<string, unknown>
   parsedCount?: number
   sourceHash?: string
+  syncedAt?: string
   warnings?: string[]
 }
 
@@ -51,6 +52,15 @@ export class CloudCredentialSyncService {
 
   isTargetConfigured(config: unknown, target: DataTarget) {
     return Boolean(this.getCloudFunction(config, target))
+  }
+
+  canRunTarget(config: unknown, target: DataTarget) {
+    const cloudFunction = this.getCloudFunction(config, target)
+
+    return Boolean(
+      cloudFunction?.url ||
+        (cloudFunction?.functionName && this.getCloudBaseEnv()),
+    )
   }
 
   async syncByCredentials(input: {
@@ -194,6 +204,9 @@ export class CloudCredentialSyncService {
         ...(process.env.TENCENTCLOUD_SECRETKEY
           ? { secretKey: process.env.TENCENTCLOUD_SECRETKEY }
           : {}),
+        ...(process.env.TENCENTCLOUD_SESSIONTOKEN
+          ? { sessionToken: process.env.TENCENTCLOUD_SESSIONTOKEN }
+          : {}),
       })
     }
 
@@ -222,14 +235,25 @@ export class CloudCredentialSyncService {
       throw new Error('CLOUD_SYNC_EMPTY_RESULT')
     }
 
-    const cacheResults = result.cacheResults.filter((item) => {
-      return Boolean(
-        item &&
+    const cacheResults = result.cacheResults.flatMap((item) => {
+      if (
+        !(
+          item &&
           ['course', 'score', 'exam', 'profile'].includes(item.target) &&
           item.cacheData &&
           typeof item.cacheData === 'object' &&
-          !Array.isArray(item.cacheData),
-      )
+          !Array.isArray(item.cacheData)
+        )
+      ) {
+        return []
+      }
+
+      return [
+        {
+          ...item,
+          cacheData: this.withCacheResultMeta(item),
+        },
+      ]
     })
 
     if (cacheResults.length === 0) {
@@ -237,6 +261,17 @@ export class CloudCredentialSyncService {
     }
 
     return { ...result, cacheResults }
+  }
+
+  private withCacheResultMeta(
+    cacheResult: CloudCredentialCacheResult,
+  ): Record<string, unknown> {
+    return {
+      ...cacheResult.cacheData,
+      ...(cacheResult.termId ? { termId: cacheResult.termId } : {}),
+      ...(cacheResult.sourceHash ? { sourceHash: cacheResult.sourceHash } : {}),
+      ...(cacheResult.syncedAt ? { syncedAt: cacheResult.syncedAt } : {}),
+    }
   }
 
   private getErrorMessage(data: unknown) {
