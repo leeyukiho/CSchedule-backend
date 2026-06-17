@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common'
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common'
 
 import { DataTarget } from '../providers/provider.types'
 import { SyncService } from './sync.service'
@@ -8,8 +8,11 @@ export class SyncController {
   constructor(private readonly syncService: SyncService) {}
 
   @Get(':jobId')
-  getSyncJob(@Param('jobId') jobId: string) {
-    return this.syncService.getSyncJob(jobId)
+  getSyncJob(
+    @Param('jobId') jobId: string,
+    @Query('includeCache') includeCache?: string,
+  ) {
+    return this.syncService.getSyncJob(jobId, includeCache === '1' || includeCache === 'true')
   }
 }
 

@@ -294,7 +294,7 @@ export class SyncService {
     }
   }
 
-  async getSyncJob(jobId: string): Promise<SyncJobResponse> {
+  async getSyncJob(jobId: string, includeCache = false): Promise<SyncJobResponse> {
     const record = await this.prisma.syncRecord.findUnique({
       where: { id: jobId },
     })
@@ -303,7 +303,7 @@ export class SyncService {
       throw new NotFoundException('Sync job not found')
     }
 
-    return this.toSyncJobResponseWithCache(record)
+    return includeCache ? this.toSyncJobResponseWithCache(record) : this.toSyncJobResponse(record)
   }
 
   private enqueueManualSync(task: ManualSyncTask) {

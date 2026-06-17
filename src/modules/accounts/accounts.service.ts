@@ -15,7 +15,18 @@ export class StudentAccountsService {
 
   async listAccounts(): Promise<StudentAccountSummary[]> {
     const accounts = await this.prisma.studentAccount.findMany({
-      include: {
+      select: {
+        id: true,
+        schoolId: true,
+        providerId: true,
+        displayName: true,
+        status: true,
+        credentialSaveMode: true,
+        sessionReusable: true,
+        sessionRefreshable: true,
+        sessionExpireAt: true,
+        lastLoginAt: true,
+        lastCachedAt: true,
         school: {
           select: {
             id: true,
@@ -36,7 +47,18 @@ export class StudentAccountsService {
   async getAccount(accountId: string): Promise<StudentAccountSummary> {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
-      include: {
+      select: {
+        id: true,
+        schoolId: true,
+        providerId: true,
+        displayName: true,
+        status: true,
+        credentialSaveMode: true,
+        sessionReusable: true,
+        sessionRefreshable: true,
+        sessionExpireAt: true,
+        lastLoginAt: true,
+        lastCachedAt: true,
         school: {
           select: {
             id: true,

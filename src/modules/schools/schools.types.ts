@@ -31,9 +31,9 @@ export interface SchoolListItem {
   providerId?: string
   loginMode?: LoginMode
   dataAccess?: ProviderDataAccess
-  capabilities: ProviderCapabilities
+  capabilities?: ProviderCapabilities
   credentialSave?: CredentialSaveCapability
-  syncStrategy: SchoolSyncStrategy
+  syncStrategy?: SchoolSyncStrategy
   message?: string
 }
 

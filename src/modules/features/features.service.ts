@@ -38,7 +38,20 @@ export class FeaturesService {
   ) {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
-      include: { school: true },
+      select: {
+        authState: true,
+        schoolId: true,
+        providerId: true,
+        sessionReusable: true,
+        sessionRefreshable: true,
+        sessionExpireAt: true,
+        status: true,
+        school: {
+          select: {
+            config: true,
+          },
+        },
+      },
     })
 
     if (!account) {
@@ -54,29 +67,22 @@ export class FeaturesService {
       orderBy: { syncedAt: 'desc' },
     })
 
+    if (cache?.sourceHash && knownHash && knownHash === cache.sourceHash) {
+      return {
+        target,
+        termId: cache.termId ?? termId,
+        sourceHash: cache.sourceHash,
+        notModified: true,
+        syncedAt: cache.syncedAt.toISOString(),
+      }
+    }
+
     const display = this.providerDisplay.getDisplay(account.school.config, account.providerId, target)
     const session = {
       sessionReusable: account.sessionReusable,
       sessionRefreshable: account.sessionRefreshable,
       sessionExpireAt: account.sessionExpireAt?.toISOString(),
       accountStatus: account.status,
-    }
-
-    if (cache?.sourceHash && knownHash && knownHash === cache.sourceHash) {
-      return {
-        accountId,
-        schoolId: account.schoolId,
-        providerId: account.providerId,
-        target,
-        termId: cache.termId ?? termId,
-        data: null,
-        meta: null,
-        display,
-        sourceHash: cache.sourceHash,
-        notModified: true,
-        syncedAt: cache.syncedAt.toISOString(),
-        session,
-      }
     }
 
     const data =

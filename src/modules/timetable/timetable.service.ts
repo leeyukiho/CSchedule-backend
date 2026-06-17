@@ -18,7 +18,19 @@ export class TimetableService {
   ): Promise<TimetableCacheResponse> {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
-      include: { school: true },
+      select: {
+        schoolId: true,
+        providerId: true,
+        sessionReusable: true,
+        sessionRefreshable: true,
+        sessionExpireAt: true,
+        status: true,
+        school: {
+          select: {
+            config: true,
+          },
+        },
+      },
     })
 
     if (!account) {
@@ -32,29 +44,21 @@ export class TimetableService {
       },
       orderBy: { syncedAt: 'desc' },
     })
+    if (cache?.sourceHash && knownHash && knownHash === cache.sourceHash) {
+      return {
+        termId: this.cleanTermLabel(cache.termId ?? termId),
+        sourceHash: cache.sourceHash,
+        notModified: true,
+        syncedAt: cache.syncedAt.toISOString(),
+      }
+    }
+
     const display = this.providerDisplay.getDisplay(account.school.config, account.providerId, 'course')
     const session = {
       sessionReusable: account.sessionReusable,
       sessionRefreshable: account.sessionRefreshable,
       sessionExpireAt: account.sessionExpireAt?.toISOString(),
       accountStatus: account.status,
-    }
-
-    if (cache?.sourceHash && knownHash && knownHash === cache.sourceHash) {
-      return {
-        accountId,
-        schoolId: account.schoolId,
-        providerId: account.providerId,
-        termId: this.cleanTermLabel(cache.termId ?? termId),
-        courses: [],
-        terms: [],
-        sectionTimes: [],
-        display,
-        sourceHash: cache.sourceHash,
-        notModified: true,
-        syncedAt: cache.syncedAt.toISOString(),
-        session,
-      }
     }
 
     const termCaches = await this.prisma.courseCache.findMany({

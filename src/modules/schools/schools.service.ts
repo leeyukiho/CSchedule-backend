@@ -30,10 +30,12 @@ export class SchoolsService {
     enabledOnly = true,
     limitInput?: number,
     offsetInput?: number,
+    fields: 'full' | 'summary' = 'full',
   ): Promise<SchoolListResponse> {
     const text = keyword?.trim()
     const limit = Math.min(Math.max(Number(limitInput) || 50, 1), 100)
     const offset = Math.max(Number(offsetInput) || 0, 0)
+    const summaryOnly = fields === 'summary'
     const where = text
       ? {
           OR: [
@@ -58,6 +60,20 @@ export class SchoolsService {
     const [schools, total] = await this.prisma.$transaction([
       this.prisma.school.findMany({
         where: combinedWhere,
+        select: {
+          id: true,
+          name: true,
+          shortName: true,
+          province: true,
+          city: true,
+          config: !summaryOnly,
+          status: true,
+          enabled: true,
+          providerId: true,
+          loginMode: !summaryOnly,
+          dataAccess: !summaryOnly,
+          capabilities: true,
+        },
         orderBy: [{ enabled: 'desc' }, { status: 'asc' }, { name: 'asc' }],
         take: limit,
         skip: offset,
@@ -74,23 +90,31 @@ export class SchoolsService {
         shortName: school.shortName ?? undefined,
         province: school.province ?? undefined,
         city: school.city ?? undefined,
-        ...this.getCatalogInfo(school.config),
+        ...(summaryOnly ? {} : this.getCatalogInfo(school.config)),
         status: school.status,
         enabled: school.enabled,
         providerId: school.providerId ?? undefined,
-        loginMode: school.loginMode ?? undefined,
-        dataAccess: this.asDataAccess(school.dataAccess),
+        ...(summaryOnly
+          ? {}
+          : {
+              loginMode: school.loginMode ?? undefined,
+              dataAccess: this.asDataAccess(school.dataAccess),
+            }),
         capabilities: this.asCapabilities(school.capabilities),
-        credentialSave: this.getCredentialSaveCapability(
-          school.providerId,
-          school.config,
-        ),
-        syncStrategy: this.getSchoolSyncStrategy({
-          providerId: school.providerId,
-          dataAccess: this.asDataAccess(school.dataAccess),
-          capabilities: this.asCapabilities(school.capabilities),
-          config: school.config,
-        }),
+        ...(summaryOnly
+          ? {}
+          : {
+              credentialSave: this.getCredentialSaveCapability(
+                school.providerId,
+                school.config,
+              ),
+              syncStrategy: this.getSchoolSyncStrategy({
+                providerId: school.providerId,
+                dataAccess: this.asDataAccess(school.dataAccess),
+                capabilities: this.asCapabilities(school.capabilities),
+                config: school.config,
+              }),
+            }),
         message: this.getStatusMessage(school.enabled, school.status),
       })),
       total,

@@ -12,12 +12,14 @@ export class SchoolsController {
     @Query('enabledOnly') enabledOnly?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('fields') fields?: string,
   ) {
     return this.schoolsService.listSchools(
       keyword,
       enabledOnly !== 'false',
       limit ? Number(limit) : undefined,
       offset ? Number(offset) : undefined,
+      fields === 'summary' ? 'summary' : 'full',
     )
   }
 

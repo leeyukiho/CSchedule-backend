@@ -7,7 +7,7 @@ export interface AccountSessionSummary {
   accountStatus: AccountStatus
 }
 
-export interface TimetableCacheResponse {
+export interface TimetableCacheDataResponse {
   accountId: string
   schoolId: string
   providerId: string
@@ -21,3 +21,14 @@ export interface TimetableCacheResponse {
   syncedAt?: string
   session: AccountSessionSummary
 }
+
+export interface TimetableNotModifiedResponse {
+  termId?: string
+  sourceHash?: string
+  notModified: true
+  syncedAt?: string
+}
+
+export type TimetableCacheResponse =
+  | TimetableCacheDataResponse
+  | TimetableNotModifiedResponse
