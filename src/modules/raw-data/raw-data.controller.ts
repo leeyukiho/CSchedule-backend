@@ -43,6 +43,10 @@ export class RawDataController {
     @Param('accountId') accountId: string,
     @Body() input: CompleteWebviewSyncDto,
   ) {
-    return this.rawDataService.completeWebviewSync(accountId, input.completedTargets)
+    return this.rawDataService.completeWebviewSync(
+      accountId,
+      input.completedTargets,
+      input.requiredTargets,
+    )
   }
 }

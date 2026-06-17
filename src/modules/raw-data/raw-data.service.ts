@@ -20,6 +20,9 @@ export interface RawDataUploadRequest {
   contentType: "json" | "html" | "text" | "csv" | "xlsx" | "ics" | "pdf";
   sourceUrl?: string;
   payload: unknown;
+  completedTargets?: DataTarget[];
+  requiredTargets?: DataTarget[];
+  responseMode?: "full" | "status_only";
   meta?: Record<string, unknown>;
 }
 
@@ -46,6 +49,10 @@ const MAX_RAW_PAYLOAD_NODES = 12000;
 const MAX_RAW_PAYLOAD_STRING_LENGTH = 1024 * 1024;
 const BACKEND_RAW_CONTENT_TYPES: RawDataUploadRequest["contentType"][] = [
   "json",
+];
+const RAW_DATA_RESPONSE_MODES: NonNullable<RawDataUploadRequest["responseMode"]>[] = [
+  "full",
+  "status_only",
 ];
 
 @Injectable()
@@ -107,6 +114,12 @@ export class RawDataService {
 
     const sourceHash = this.createSourceHash(input);
     const syncedAt = new Date();
+    const responseMode = input.responseMode ?? "full";
+    const requiredTargets = this.normalizeRequiredTargets(input.requiredTargets);
+    const completedTargets = this.normalizeCompletedTargets([
+      ...(input.completedTargets ?? []),
+      input.target,
+    ]);
     let cacheId = sourceHash;
     const termId = input.termId ?? parsed.termId;
     const session = {
@@ -121,6 +134,28 @@ export class RawDataService {
       input.target,
     );
     let cacheData: Record<string, unknown>;
+    const existingCache = await this.findExistingCache(
+      account.id,
+      input.target,
+      sourceHash,
+    );
+
+    if (existingCache) {
+      return {
+        accountId: account.id,
+        target: input.target,
+        cacheId: existingCache.id,
+        sourceHash,
+        status: "cached",
+        parsedCount: parsed.count,
+        warnings: parsed.warnings,
+        syncedAt: existingCache.syncedAt.toISOString(),
+        syncStatus: {
+          accountId: account.id,
+          ...this.createWebviewSyncStatus(requiredTargets, completedTargets),
+        },
+      };
+    }
 
     if (input.target === "course") {
       const cache = await this.prisma.courseCache.upsert({
@@ -247,11 +282,11 @@ export class RawDataService {
       status: "cached",
       parsedCount: parsed.count,
       warnings: parsed.warnings,
-      cacheData,
+      syncedAt: syncedAt.toISOString(),
+      ...(responseMode === "full" ? { cacheData } : {}),
       syncStatus: {
-        status: "ready",
-        canCloseWebview: input.target === "course",
-        missingRequiredTargets: input.target === "course" ? [] : ["course"],
+        accountId: account.id,
+        ...this.createWebviewSyncStatus(requiredTargets, completedTargets),
       },
     };
   }
@@ -259,6 +294,7 @@ export class RawDataService {
   async completeWebviewSync(
     accountId: string,
     completedTargets: DataTarget[] = [],
+    requiredTargets: DataTarget[] = ["course"],
   ) {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
@@ -268,6 +304,10 @@ export class RawDataService {
           take: 1,
           orderBy: { syncedAt: "desc" },
         },
+        featureCaches: {
+          select: { target: true },
+          orderBy: { syncedAt: "desc" },
+        },
       },
     });
 
@@ -275,18 +315,97 @@ export class RawDataService {
       throw new NotFoundException("Student account not found");
     }
 
-    const hasCourseCache =
-      completedTargets.includes("course") || account.courseCaches.length > 0;
-    const missingRequiredTargets = hasCourseCache ? [] : ["course"];
+    const normalizedRequiredTargets =
+      this.normalizeRequiredTargets(requiredTargets);
+    const persistedTargets = this.normalizeCompletedTargets([
+      ...(account.courseCaches.length > 0 ? (["course"] as DataTarget[]) : []),
+      ...account.featureCaches.map((cache) => cache.target),
+    ]);
+    const syncStatus = this.createWebviewSyncStatus(normalizedRequiredTargets, [
+      ...completedTargets,
+      ...persistedTargets,
+    ]);
 
     return {
       accountId,
-      status: missingRequiredTargets.length === 0 ? "ready" : "partial",
-      canCloseWebview: missingRequiredTargets.length === 0,
+      status: syncStatus.status,
+      canCloseWebview: syncStatus.canCloseWebview,
       sessionReusable: account.sessionReusable,
       sessionExpireAt: account.sessionExpireAt?.toISOString(),
+      missingRequiredTargets: syncStatus.missingRequiredTargets,
+    };
+  }
+
+  private normalizeRequiredTargets(targets?: DataTarget[]): DataTarget[] {
+    const validTargets = Array.isArray(targets)
+      ? targets.filter((target): target is DataTarget =>
+          RAW_DATA_TARGETS.includes(target),
+        )
+      : [];
+    const uniqueTargets = [...new Set(validTargets)];
+
+    return uniqueTargets.length > 0 ? uniqueTargets : ["course"];
+  }
+
+  private normalizeCompletedTargets(targets?: DataTarget[]): DataTarget[] {
+    const validTargets = Array.isArray(targets)
+      ? targets.filter((target): target is DataTarget =>
+          RAW_DATA_TARGETS.includes(target),
+        )
+      : [];
+
+    return [...new Set(validTargets)];
+  }
+
+  private createWebviewSyncStatus(
+    requiredTargets: DataTarget[],
+    completedTargets: DataTarget[],
+  ) {
+    const completed = new Set(completedTargets);
+    const missingRequiredTargets = requiredTargets.filter(
+      (target) => !completed.has(target),
+    );
+
+    return {
+      status: missingRequiredTargets.length === 0 ? "ready" : "partial",
+      canCloseWebview: missingRequiredTargets.length === 0,
       missingRequiredTargets,
     };
+  }
+
+  private async findExistingCache(
+    accountId: string,
+    target: DataTarget,
+    sourceHash: string,
+  ) {
+    if (target === "course") {
+      return this.prisma.courseCache.findUnique({
+        where: {
+          courseCacheAccountSourceHash: {
+            accountId,
+            sourceHash,
+          },
+        },
+        select: {
+          id: true,
+          syncedAt: true,
+        },
+      });
+    }
+
+    return this.prisma.featureCache.findUnique({
+      where: {
+        featureCacheAccountTargetSourceHash: {
+          accountId,
+          target,
+          sourceHash,
+        },
+      },
+      select: {
+        id: true,
+        syncedAt: true,
+      },
+    });
   }
 
   private validateRawDataInput(providerId: string, input: RawDataUploadRequest) {
@@ -306,6 +425,29 @@ export class RawDataService {
       throw new BadRequestException(
         "PARSER_NOT_FOUND: send non-json raw payload to cloud parser before backend upload",
       );
+    }
+
+    if (
+      input.responseMode !== undefined &&
+      !RAW_DATA_RESPONSE_MODES.includes(input.responseMode)
+    ) {
+      throw new BadRequestException("RAW_RESPONSE_MODE_INVALID");
+    }
+
+    if (
+      input.requiredTargets !== undefined &&
+      (!Array.isArray(input.requiredTargets) ||
+        input.requiredTargets.some((target) => !RAW_DATA_TARGETS.includes(target)))
+    ) {
+      throw new BadRequestException("RAW_REQUIRED_TARGETS_INVALID");
+    }
+
+    if (
+      input.completedTargets !== undefined &&
+      (!Array.isArray(input.completedTargets) ||
+        input.completedTargets.some((target) => !RAW_DATA_TARGETS.includes(target)))
+    ) {
+      throw new BadRequestException("RAW_COMPLETED_TARGETS_INVALID");
     }
 
     this.assertProviderAccessMode(providerId, input);

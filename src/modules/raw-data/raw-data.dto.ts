@@ -23,6 +23,7 @@ const RAW_DATA_CONTENT_TYPES = [
   'ics',
   'pdf',
 ] as const
+const RAW_DATA_RESPONSE_MODES = ['full', 'status_only'] as const
 const MAX_CONTEXT_ID_LENGTH = 128
 const MAX_TERM_ID_LENGTH = 128
 const MAX_SOURCE_URL_LENGTH = 2048
@@ -56,6 +57,22 @@ export class RawDataUploadDto implements RawDataUploadRequest {
   payload!: unknown
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsIn(DATA_TARGETS, { each: true })
+  completedTargets?: DataTarget[]
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsIn(DATA_TARGETS, { each: true })
+  requiredTargets?: DataTarget[]
+
+  @IsOptional()
+  @IsIn(RAW_DATA_RESPONSE_MODES)
+  responseMode?: RawDataUploadRequest['responseMode']
+
+  @IsOptional()
   @IsObject()
   meta?: Record<string, unknown>
 }
@@ -86,6 +103,22 @@ export class RawCourseUploadDto implements Omit<RawDataUploadRequest, 'target'> 
   payload!: unknown
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsIn(DATA_TARGETS, { each: true })
+  completedTargets?: DataTarget[]
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsIn(DATA_TARGETS, { each: true })
+  requiredTargets?: DataTarget[]
+
+  @IsOptional()
+  @IsIn(RAW_DATA_RESPONSE_MODES)
+  responseMode?: RawDataUploadRequest['responseMode']
+
+  @IsOptional()
   @IsObject()
   meta?: Record<string, unknown>
 }
@@ -96,4 +129,10 @@ export class CompleteWebviewSyncDto {
   @ArrayMaxSize(4)
   @IsIn(DATA_TARGETS, { each: true })
   completedTargets?: DataTarget[]
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsIn(DATA_TARGETS, { each: true })
+  requiredTargets?: DataTarget[]
 }

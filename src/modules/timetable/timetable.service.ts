@@ -164,6 +164,12 @@ export class TimetableService {
     term: unknown,
   ) {
     const cleanId = this.cleanTermLabel(id)
+    const rawLabel = this.asRecord(term).label ?? this.asRecord(term).title ?? this.asRecord(term).name
+
+    if (!cleanId && this.isScheduleTermNoise(id) && this.isScheduleTermNoise(rawLabel)) {
+      return
+    }
+
     const cleanTerm = this.cleanTermRecord({ ...this.asRecord(term), id: cleanId || id })
     const key = this.getTermKey(cleanTerm)
     const existingId = canonicalIds.get(key)
@@ -196,9 +202,15 @@ export class TimetableService {
     const record = this.asRecord(value)
     const id = this.cleanTermLabel(record.id)
     const label = this.cleanTermLabel(record.label ?? record.title ?? record.name ?? record.id)
+    const cleanRecord = { ...record }
+
+    if (!label) {
+      delete cleanRecord.label
+      delete cleanRecord.title
+    }
 
     return {
-      ...record,
+      ...cleanRecord,
       ...(id ? { id } : {}),
       ...(label ? { label, title: label } : {}),
     }
@@ -235,11 +247,32 @@ export class TimetableService {
       return academicLabel
     }
 
-    return text
-      .replace(/\s*学生课表\s*/g, ' ')
-      .replace(/\s*第\s*[\d一二三四五六七八九十]+\s*周\s*/g, ' ')
+    return this.stripScheduleTermNoise(text)
+  }
+
+  private stripScheduleTermNoise(value: string) {
+    return value
+      .replace(/\s*学生\s*课表\s*/g, ' ')
+      .replace(
+        /[\s,，、;；|/\\_-]*第?\s*[\d一二三四五六七八九十]+(?:\s*[-~—至]\s*[\d一二三四五六七八九十]+)?\s*周\s*/g,
+        ' ',
+      )
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s,，、;；|/\\_-]+|[\s,，、;；|/\\_-]+$/g, '')
+      .trim()
+  }
+
+  private isScheduleTermNoise(value: unknown) {
+    const text = String(value ?? '')
+      .replace(/&nbsp;/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim()
+
+    if (!text || this.getAcademicTermLabel(text)) {
+      return false
+    }
+
+    return this.stripScheduleTermNoise(text).replace(/[\s,，、;；|/\\_-]+/g, '') === ''
   }
 
   private getAcademicTermLabel(value: string) {
