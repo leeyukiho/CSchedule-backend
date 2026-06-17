@@ -3,7 +3,7 @@ import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { ProviderRegistryService } from '../providers/provider-registry.service'
 import { DataTarget } from '../providers/provider.types'
-import { CloudSyncWorkerService } from './cloud-sync-worker.service'
+import { CloudCredentialSyncService } from './cloud-credential-sync.service'
 import { SyncService } from './sync.service'
 
 const DEFAULT_SCAN_INTERVAL_MS = 10 * 60 * 1000
@@ -49,7 +49,7 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly providers: ProviderRegistryService,
-    private readonly cloudWorker: CloudSyncWorkerService,
+    private readonly cloudSync: CloudCredentialSyncService,
     private readonly syncService: SyncService,
   ) {}
 
@@ -96,11 +96,18 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
       })
 
       for (const account of accounts) {
-        if (!this.canScheduleProvider(account.providerId, account.school.dataAccess)) {
-          continue
-        }
-
         for (const target of this.targets) {
+          if (
+            !this.canScheduleProvider(
+              account.providerId,
+              account.school.dataAccess,
+              account.school.config,
+              target,
+            )
+          ) {
+            continue
+          }
+
           await this.syncService.createManualSync(account.id, target)
         }
       }
@@ -109,20 +116,19 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private canScheduleProvider(providerId: string, dataAccess: unknown) {
-    if (
-      this.cloudWorker.isEnabled() &&
-      this.asDataAccessTarget(dataAccess, 'course').includes('server_session')
-    ) {
-      return true
-    }
-
+  private canScheduleProvider(
+    providerId: string,
+    dataAccess: unknown,
+    config: unknown,
+    target: DataTarget,
+  ) {
     try {
       const provider = this.providers.getProvider(providerId)
 
       return (
         provider.meta.credentialSave?.autoSync === 'password_login' &&
-        Boolean(provider.course)
+        this.asDataAccessTarget(dataAccess, target).includes('cloud_worker') &&
+        this.cloudSync.isTargetConfigured(config, target)
       )
     } catch {
       return false

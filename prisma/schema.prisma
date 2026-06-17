@@ -26,7 +26,7 @@ enum LoginMode {
 }
 
 enum DataAccessMode {
-  server_session
+  cloud_worker
   webview_client_fetch
   session_import
   manual_import

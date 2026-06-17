@@ -4,18 +4,17 @@ import { CredentialVaultService } from "../../common/crypto/credential-vault.ser
 import { AccountsModule } from "../accounts/accounts.module";
 import { ProvidersModule } from "../providers/providers.module";
 import { AutoSyncScheduler } from "./auto-sync.scheduler";
-import { CloudSyncWorkerService } from "./cloud-sync-worker.service";
+import { CloudCredentialSyncModule } from "./cloud-credential-sync.module";
 import { CourseSyncService } from "./course-sync.service";
 import { AccountSyncController, SyncController } from "./sync.controller";
 import { SyncService } from "./sync.service";
 
 @Module({
-  imports: [AccountsModule, ProvidersModule],
+  imports: [AccountsModule, ProvidersModule, CloudCredentialSyncModule],
   controllers: [SyncController, AccountSyncController],
   providers: [
     SyncService,
     CourseSyncService,
-    CloudSyncWorkerService,
     AutoSyncScheduler,
     CredentialVaultService,
   ],

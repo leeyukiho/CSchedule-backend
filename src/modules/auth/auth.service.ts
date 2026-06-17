@@ -11,7 +11,12 @@ import { StudentIdentityService } from "../accounts/student-identity.service";
 import { ProviderRegistryService } from "../providers/provider-registry.service";
 import { DataTarget } from "../providers/provider.types";
 import { CourseSyncService } from "../sync/course-sync.service";
-import { LoginSubmitRequest, LoginSubmitResponse } from "./auth.types";
+import {
+  LoginCacheData,
+  LoginCacheResult,
+  LoginSubmitRequest,
+  LoginSubmitResponse,
+} from "./auth.types";
 
 @Injectable()
 export class AuthService {
@@ -44,20 +49,18 @@ export class AuthService {
     const providerId = existingSchool.providerId ?? schoolId;
     const loginMode = existingSchool.loginMode ?? "direct_password";
     const credentialSaveMode = this.getCredentialSaveMode(providerId, input);
-    const target = input.target ?? "course";
+    const hasCredentials = Boolean(input.username && input.password);
 
-    if (
-      credentialSaveMode === "password_vault" &&
-      (!input.username || !input.password || !input.verifiedByCloud)
-    ) {
+    if (credentialSaveMode === "password_vault" && !hasCredentials) {
       throw new BadRequestException(
         "verified username and password are required when saving credentials",
       );
     }
+    const cloudCacheResults = this.getCloudCacheResults(input);
 
-    if (input.verifiedByCloud && !input.cacheData) {
+    if (input.verifiedByCloud && cloudCacheResults.length === 0) {
       throw new BadRequestException(
-        "cacheData is required when cloud verification succeeds",
+        "cacheResults is required when cloud verification succeeds",
       );
     }
 
@@ -81,45 +84,73 @@ export class AuthService {
       cloudWarnings: input.cloudWarnings,
       ...(authStatePatch || {}),
     });
-    const account = await this.studentIdentity.findOrCreateAccount({
-      schoolId,
-      providerId,
-      studentNo: input.username,
-      data: {
-        status: "need_login",
-        authState,
-        cacheState: {},
-        sessionReusable: false,
-        sessionRefreshable: false,
-        credentialSaveMode,
-        lastLoginAt: new Date(),
-        lastAuthErrorCode: null,
-        lastAuthErrorAt: null,
-      },
-    });
+    const account = input.accountId
+      ? await this.updateExistingAccountAfterLogin({
+          accountId: input.accountId,
+          schoolId,
+          providerId,
+          studentNo: input.username,
+          authState,
+          credentialSaveMode,
+        })
+      : await this.studentIdentity.findOrCreateAccount({
+          schoolId,
+          providerId,
+          studentNo: input.username,
+          data: {
+            status: "need_login",
+            authState,
+            cacheState: {},
+            sessionReusable: false,
+            sessionRefreshable: false,
+            credentialSaveMode,
+            lastLoginAt: new Date(),
+            lastAuthErrorCode: null,
+            lastAuthErrorAt: null,
+          },
+        });
 
-    if (input.verifiedByCloud && input.cacheData) {
-      const cache = await this.courseSync.writeCloudCacheResult({
-        accountId: account.id,
-        target,
-        cacheData: input.cacheData,
-        credentialSaveMode,
-        authStatePatch: {
+    if (input.verifiedByCloud && cloudCacheResults.length) {
+      const authStatePatch = {
           ...this.asRecord(account.authState),
           ...this.asRecord(authState),
           cloudVerified: true,
           cloudVerifiedAt: new Date().toISOString(),
           cloudWarnings: input.cloudWarnings,
-        },
-      });
+      };
+      const writtenCaches = [];
+
+      for (const cacheResult of cloudCacheResults) {
+        const cache = await this.courseSync.writeCloudCacheResult({
+          accountId: account.id,
+          target: cacheResult.target,
+          cacheData: cacheResult.cacheData,
+          credentialSaveMode,
+          authStatePatch,
+        });
+        writtenCaches.push({ input: cacheResult, cache });
+      }
+
+      const primary =
+        writtenCaches.find((item) => item.input.target === "course") ??
+        writtenCaches[0];
+      const normalizedResults = cloudCacheResults.map((item) => ({
+        ...item,
+        cacheData: this.withAccountId(item.cacheData, account.id),
+      }));
 
       return {
         accountId: account.id,
         status: "cached",
         sessionReusable: false,
         requiredFetchTargets: [],
-        cacheId: cache.cacheId,
-        parsedCount: input.parsedCount ?? cache.parsedCount,
+        cacheId: primary?.cache.cacheId,
+        parsedCount:
+          input.parsedCount ??
+          primary?.input.parsedCount ??
+          primary?.cache.parsedCount,
+        cacheResults: normalizedResults,
+        savedTargets: writtenCaches.map((item) => item.input.target),
       };
     }
 
@@ -207,6 +238,43 @@ export class AuthService {
     });
   }
 
+  private async updateExistingAccountAfterLogin(input: {
+    accountId: string;
+    schoolId: string;
+    providerId: string;
+    studentNo?: string;
+    authState: Prisma.InputJsonValue;
+    credentialSaveMode: "none" | "password_vault";
+  }) {
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: input.accountId },
+    });
+
+    if (!account || account.schoolId !== input.schoolId) {
+      throw new NotFoundException("Student account not found");
+    }
+
+    const identityAccount = await this.studentIdentity.bindStudentIdentity({
+      accountId: account.id,
+      schoolId: input.schoolId,
+      providerId: input.providerId,
+      studentNo: input.studentNo,
+      authState: input.authState,
+    });
+
+    return this.prisma.studentAccount.update({
+      where: { id: identityAccount.id },
+      data: {
+        providerId: input.providerId,
+        authState: input.authState,
+        credentialSaveMode: input.credentialSaveMode,
+        lastLoginAt: new Date(),
+        lastAuthErrorCode: null,
+        lastAuthErrorAt: null,
+      },
+    });
+  }
+
   private getCredentialSaveMode(
     providerId: string,
     input: LoginSubmitRequest,
@@ -243,6 +311,29 @@ export class AuthService {
     }
 
     return ["course"];
+  }
+
+  private getCloudCacheResults(input: LoginSubmitRequest): LoginCacheResult[] {
+    if (Array.isArray(input.cacheResults) && input.cacheResults.length > 0) {
+      return input.cacheResults.filter((item) => {
+        return Boolean(
+          item &&
+            ["course", "score", "exam", "profile"].includes(item.target) &&
+            item.cacheData &&
+            typeof item.cacheData === "object" &&
+            !Array.isArray(item.cacheData),
+        );
+      });
+    }
+
+    return [];
+  }
+
+  private withAccountId(cacheData: LoginCacheData, accountId: string) {
+    return {
+      ...cacheData,
+      accountId,
+    };
   }
 
   private assertSchoolAvailable(school: { enabled: boolean; status: string }) {

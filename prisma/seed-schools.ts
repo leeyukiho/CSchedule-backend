@@ -17,121 +17,6 @@ const EMPTY_CAPABILITIES = {
   profile: false,
 }
 const EMPTY_DATA_ACCESS = { course: [], score: [], exam: [], profile: [] }
-const CONNECTED_SCHOOLS: ConnectedSchoolSeed[] = [
-  {
-    id: 'wtbu',
-    catalogCode: '4142013242',
-    name: '武汉工商学院',
-    shortName: '武工商',
-    province: '湖北省',
-    city: '武汉市',
-    aliases: ['武汉工商学院', '武工商', 'WTBU', 'wtbu'],
-    providerId: 'wtbu',
-    loginMode: 'direct_password',
-    eduSystemType: 'eams',
-    homepageUrl: 'https://jxgl.wtbu.edu.cn/eams/home.action',
-    authUrl: 'https://jxgl.wtbu.edu.cn/eams/home.action',
-    verifiedAt: '2026-06-12T00:00:00.000Z',
-    capabilities: { course: true, score: true, exam: true, profile: true },
-    dataAccess: {
-      course: ['server_session', 'webview_client_fetch', 'manual_import'],
-      score: ['server_session', 'webview_client_fetch', 'manual_import'],
-      exam: ['server_session', 'webview_client_fetch', 'manual_import'],
-      profile: ['server_session', 'webview_client_fetch', 'manual_import'],
-    },
-    providerConfig: {
-      baseUrl: 'https://jxgl.wtbu.edu.cn',
-      system: 'EAMS',
-      scheduleParser: 'TaskActivity',
-      authConfig: {
-        captchaRequired: false,
-        captchaKind: 'none',
-        uiPreset: 'password',
-        passwordTransform: 'sha1_salt',
-      },
-    },
-  },
-  {
-    id: 'whhxit',
-    catalogCode: '4142013666',
-    name: '武汉华夏理工学院',
-    shortName: '华夏理工',
-    province: '湖北省',
-    city: '武汉市',
-    aliases: [
-      '武汉华夏理工学院',
-      '华夏理工学院',
-      '华夏理工',
-      'WHHXIT',
-      'whhxit',
-    ],
-    providerId: 'whhxit',
-    loginMode: 'direct_password',
-    eduSystemType: 'zf_jwglxt',
-    homepageUrl: 'https://jwgl.whhxit.edu.cn/',
-    authUrl: 'https://jwgl.whhxit.edu.cn/jwglxt/xtgl/login_slogin.html',
-    verifiedAt: '2026-06-12T00:00:00.000Z',
-    capabilities: { course: true, score: false, exam: false, profile: true },
-    dataAccess: {
-      course: ['server_session'],
-      score: [],
-      exam: [],
-      profile: ['server_session'],
-    },
-    providerConfig: {
-      baseUrl: 'https://jwgl.whhxit.edu.cn',
-      system: 'ZF jwglxt V9.0',
-      schedulePath: '/jwglxt/kbcx/xskbcx_cxXsgrkb.html?gnmkdm=N2151',
-      termParams: { first: '3', second: '12', third: '16' },
-      authConfig: {
-        captchaRequired: false,
-        captchaKind: 'none',
-        uiPreset: 'password',
-        passwordTransform: 'rsa_public_key',
-      },
-    },
-  },
-  {
-    id: 'whggvc',
-    catalogCode: '4142014591',
-    name: '武汉光谷职业学院',
-    shortName: '光谷职院',
-    province: '湖北省',
-    city: '武汉市',
-    aliases: ['武汉光谷职业学院', '光谷职院', 'WHGGVC', 'whggvc'],
-    providerId: 'whggvc',
-    loginMode: 'direct_password',
-    eduSystemType: 'custom',
-    homepageUrl: 'https://xs.whggvc.net/scloudapp/#/pages/login/login',
-    authUrl: 'https://xs.whggvc.net/scloudapp/#/pages/login/login',
-    verifiedAt: '2026-06-15T00:00:00.000Z',
-    capabilities: { course: true, score: true, exam: true, profile: true },
-    dataAccess: {
-      course: ['server_session', 'webview_client_fetch', 'manual_import'],
-      score: ['server_session', 'webview_client_fetch', 'manual_import'],
-      exam: ['server_session', 'webview_client_fetch', 'manual_import'],
-      profile: ['server_session', 'webview_client_fetch', 'manual_import'],
-    },
-    providerConfig: {
-      baseUrl: 'https://xs.whggvc.net',
-      appBasePath: '/scloudapp',
-      apiBaseUrl: 'https://xs.whggvc.net/scloudoa',
-      staticDomainUrl: 'https://xs.whggvc.net/scloudoa',
-      system: 'WHGGVC Smart Campus JSON API',
-      signAlgorithm: 'jeecg_md5_candidate',
-      authConfig: {
-        captchaRequired: false,
-        captchaKind: 'none',
-        uiPreset: 'password',
-        passwordTransform: 'plain',
-        signRequired: true,
-        tokenHeader: 'X-Access-Token',
-        signHeaders: ['X-Sign', 'X-TIMESTAMP'],
-      },
-    },
-  },
-]
-
 interface SchoolCatalogFile {
   source: string
   sourceDate: string
@@ -226,7 +111,7 @@ function readCatalogFile(): SchoolCatalogFile {
 
 function readConnectedSchoolsFile(): ConnectedSchoolSeed[] {
   if (!fs.existsSync(CONNECTED_SCHOOLS_FILE)) {
-    return CONNECTED_SCHOOLS
+    throw new Error(`Connected schools file not found: ${CONNECTED_SCHOOLS_FILE}`)
   }
 
   const payload = JSON.parse(

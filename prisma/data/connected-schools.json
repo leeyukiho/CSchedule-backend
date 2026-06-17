@@ -22,15 +22,29 @@
         "profile": true
       },
       "dataAccess": {
-        "course": ["server_session", "webview_client_fetch", "manual_import"],
-        "score": ["server_session", "webview_client_fetch", "manual_import"],
-        "exam": ["server_session", "webview_client_fetch", "manual_import"],
-        "profile": ["server_session", "webview_client_fetch", "manual_import"]
+        "course": ["cloud_worker", "webview_client_fetch", "manual_import"],
+        "score": ["cloud_worker", "webview_client_fetch", "manual_import"],
+        "exam": ["cloud_worker", "webview_client_fetch", "manual_import"],
+        "profile": ["cloud_worker", "webview_client_fetch", "manual_import"]
       },
       "providerConfig": {
         "baseUrl": "https://jxgl.wtbu.edu.cn",
         "system": "EAMS",
         "scheduleParser": "TaskActivity",
+        "cloudFunctions": {
+          "course": {
+            "functionName": "syncWtbu"
+          },
+          "score": {
+            "functionName": "syncWtbu"
+          },
+          "exam": {
+            "functionName": "syncWtbu"
+          },
+          "profile": {
+            "functionName": "syncWtbu"
+          }
+        },
         "authConfig": {
           "captchaRequired": false,
           "captchaKind": "none",
@@ -53,7 +67,7 @@
       "homepageUrl": "https://jwgl.whhxit.edu.cn/",
       "authUrl": "https://jwgl.whhxit.edu.cn/jwglxt/xtgl/login_slogin.html",
       "verifiedAt": "2026-06-12T00:00:00.000Z",
-      "status": "enabled",
+      "status": "researching",
       "capabilities": {
         "course": true,
         "score": false,
@@ -61,10 +75,10 @@
         "profile": true
       },
       "dataAccess": {
-        "course": ["server_session"],
+        "course": ["manual_import"],
         "score": [],
         "exam": [],
-        "profile": ["server_session"]
+        "profile": ["manual_import"]
       },
       "providerConfig": {
         "baseUrl": "https://jwgl.whhxit.edu.cn",
@@ -97,7 +111,7 @@
       "homepageUrl": "https://xs.whggvc.net/scloudapp/#/pages/login/login",
       "authUrl": "https://xs.whggvc.net/scloudapp/#/pages/login/login",
       "verifiedAt": "2026-06-15T00:00:00.000Z",
-      "status": "enabled",
+      "status": "beta",
       "capabilities": {
         "course": true,
         "score": true,
@@ -105,16 +119,16 @@
         "profile": true
       },
       "dataAccess": {
-        "course": ["server_session", "webview_client_fetch", "manual_import"],
-        "score": ["server_session", "webview_client_fetch", "manual_import"],
-        "exam": ["server_session", "webview_client_fetch", "manual_import"],
-        "profile": ["server_session", "webview_client_fetch", "manual_import"]
+        "course": ["webview_client_fetch", "manual_import"],
+        "score": ["webview_client_fetch", "manual_import"],
+        "exam": ["webview_client_fetch", "manual_import"],
+        "profile": ["webview_client_fetch", "manual_import"]
       },
       "providerConfig": {
         "baseUrl": "https://xs.whggvc.net",
         "appBasePath": "/scloudapp",
-        "apiBaseUrl": "https://scs.whggvc.net/scscloud",
-        "staticDomainUrl": "https://scs.whggvc.net/scscloud",
+        "apiBaseUrl": "https://xs.whggvc.net/scloudoa",
+        "staticDomainUrl": "https://xs.whggvc.net/scloudoa",
         "system": "WHGGVC Smart Campus JSON API",
         "signAlgorithm": "jeecg_md5_candidate",
         "authConfig": {

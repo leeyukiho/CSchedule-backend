@@ -15,12 +15,14 @@ import {
   ProviderAuthConfig,
   SchoolSyncStrategy,
 } from '../providers/provider.types'
+import { CloudCredentialSyncService } from '../sync/cloud-credential-sync.service'
 
 @Injectable()
 export class SchoolsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly providers: ProviderRegistryService,
+    private readonly cloudSync: CloudCredentialSyncService,
   ) {}
 
   async listSchools(
@@ -376,25 +378,45 @@ export class SchoolsService {
     const hasWebviewCourse = input.dataAccess.course.includes('webview_client_fetch')
     const hasManualImport = input.dataAccess.course.includes('manual_import')
     const supportsCourse = Boolean(input.capabilities.course)
+    const cloudFunctions = this.cloudSync.getCloudSyncFunctions(input.config)
+    const hasCloudCourse =
+      input.dataAccess.course.includes('cloud_worker') &&
+      Boolean(cloudFunctions.course)
 
-    if (supportsCourse && (hasWebviewCourse || canSavePassword)) {
+    if (supportsCourse && canSavePassword && hasCloudCourse) {
+      return {
+        importMode: 'password_server',
+        syncMode: 'cloud_worker',
+        ...(Object.keys(cloudFunctions).length ? { cloudFunctions } : {}),
+        cloudParserRequired: false,
+        localCachePreferred: false,
+        scheduledSyncSupported: true,
+        passwordVaultRequired: false,
+        passwordVaultOptional: true,
+        manualSyncRequired: false,
+        reason: 'This school uses cloud functions for username/password import and scheduled sync.',
+      }
+    }
+
+    if (supportsCourse && hasWebviewCourse) {
       return {
         importMode: 'webview_cloud',
-        syncMode: canSavePassword ? 'cloud_worker' : 'manual_webview',
+        syncMode: 'manual_webview',
+        ...(Object.keys(cloudFunctions).length ? { cloudFunctions } : {}),
         cloudParserRequired: true,
         localCachePreferred: true,
-        scheduledSyncSupported: canSavePassword,
-        passwordVaultRequired: canSavePassword,
-        manualSyncRequired: !canSavePassword,
-        reason: canSavePassword
-          ? 'First import uses frontend fetch and cloud parsing; saved credentials are used only for later auto-sync.'
-          : 'WebView login requires user interaction and cannot be scheduled safely.',
+        scheduledSyncSupported: false,
+        passwordVaultRequired: false,
+        passwordVaultOptional: false,
+        manualSyncRequired: true,
+        reason: 'WebView login requires user interaction and cannot be scheduled safely.',
       }
     }
 
     return {
       importMode: hasManualImport ? 'manual_import' : 'webview_cloud',
       syncMode: 'manual_webview',
+      ...(Object.keys(cloudFunctions).length ? { cloudFunctions } : {}),
       cloudParserRequired: true,
       localCachePreferred: true,
       scheduledSyncSupported: false,

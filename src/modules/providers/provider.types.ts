@@ -7,7 +7,7 @@ export type LoginMode =
   | 'qrcode'
 
 export type DataAccessMode =
-  | 'server_session'
+  | 'cloud_worker'
   | 'webview_client_fetch'
   | 'session_import'
   | 'manual_import'
@@ -146,15 +146,26 @@ export type AutoSyncCapability =
   | 'password_login_may_need_verification'
 
 export type ImportMode = 'password_server' | 'webview_cloud' | 'manual_import'
-export type SyncMode = 'cloud_worker' | 'server_worker' | 'manual_webview'
+export type SyncMode = 'cloud_worker' | 'manual_webview'
+
+export interface CloudSyncFunctionConfig {
+  functionName?: string
+  url?: string
+}
+
+export type CloudSyncFunctionMap = Partial<
+  Record<DataTarget, CloudSyncFunctionConfig>
+>
 
 export interface SchoolSyncStrategy {
   importMode: ImportMode
   syncMode: SyncMode
+  cloudFunctions?: CloudSyncFunctionMap
   cloudParserRequired: boolean
   localCachePreferred: boolean
   scheduledSyncSupported: boolean
   passwordVaultRequired: boolean
+  passwordVaultOptional?: boolean
   manualSyncRequired: boolean
   reason?: string
 }
@@ -191,56 +202,6 @@ export interface WebviewLoginDescriptor {
   closeAfterCacheWritten: boolean
 }
 
-export interface LoginContext {
-  id: string
-  schoolId: string
-  mode: LoginMode
-  fields: LoginField[]
-  state: Record<string, unknown>
-  captcha?: CaptchaDescriptor
-  webview?: WebviewLoginDescriptor
-  expireAt: string
-}
-
-export interface SubmitLoginInput {
-  contextId: string
-  username?: string
-  password?: string
-  captcha?: string
-  extra?: Record<string, unknown>
-}
-
-export interface LoginResult {
-  accountStatus: AccountStatus
-  sessionReusable: boolean
-  sessionRefreshable: boolean
-  sessionExpireAt?: string
-  requiredFetchTargets?: DataTarget[]
-  sessionSnapshot?: unknown
-  parsed?: Partial<Record<DataTarget, unknown>>
-}
-
-export interface SessionValidationResult {
-  valid: boolean
-  reusable: boolean
-  refreshable: boolean
-  expireAt?: string
-  errorCode?: string
-}
-
-export interface LoginStrategy {
-  mode: LoginMode
-  createContext(input: {
-    schoolId: string
-    providerConfig?: Record<string, unknown>
-  }): Promise<LoginContext>
-  submit?(input: SubmitLoginInput): Promise<LoginResult>
-  importSession?(input: unknown): Promise<LoginResult>
-  validateSession(session: unknown): Promise<SessionValidationResult>
-  refreshSession?(session: unknown): Promise<unknown>
-  logout?(session: unknown): Promise<void>
-}
-
 export interface SchoolProviderMeta {
   id: string
   name: string
@@ -260,127 +221,4 @@ export interface SchoolProviderMeta {
 export interface SchoolProvider {
   id: string
   meta: SchoolProviderMeta
-  login?: LoginStrategy
-  course?: CourseConnector
-  score?: ScoreConnector
-  exam?: FeatureConnector<unknown[]>
-  profile?: ProfileConnector
 }
-
-export interface ProviderTerm {
-  id: string
-  title?: string
-  label?: string
-  selected?: boolean
-}
-
-export interface ProviderCourse {
-  id?: string
-  name: string
-  teacher?: string
-  location?: string
-  classroom?: string
-  weekday: number
-  sections?: number[]
-  startSection?: number
-  endSection?: number
-  weeks: number[]
-  rawWeeks?: string
-  campus?: string
-  remark?: string
-  source?: unknown
-}
-
-export interface ProviderProfile {
-  name?: string
-  studentId?: string
-  maskedStudentId?: string
-  className?: string
-  major?: string
-  role?: string
-  grade?: string
-  level?: string
-  gender?: string
-  birthDate?: string
-  politicalStatus?: string
-  phone?: string
-  email?: string
-  nativePlace?: string
-  enrollmentDate?: string
-  studentStatus?: string
-  dormitory?: string
-  counselor?: string
-  updatedAt?: string
-}
-
-export interface ProviderSchedule {
-  term?: string
-  selectedSemesterId?: string
-  semesters?: ProviderTerm[]
-  courses: ProviderCourse[]
-  sectionTimes?: unknown[]
-}
-
-export interface CourseFetchResult {
-  schedule: ProviderSchedule
-  schedules?: ProviderSchedule[]
-  profile?: ProviderProfile | null
-  features?: Partial<Record<Exclude<DataTarget, 'course'>, unknown>>
-}
-
-export interface CourseConnector {
-  fetchByCredentials(input: {
-    username: string
-    password: string
-    semesterId?: string
-    allSemesters?: boolean
-    providerConfig?: Record<string, unknown>
-  }): Promise<CourseFetchResult>
-}
-
-export interface FeatureFetchInput {
-  username: string
-  password: string
-  semesterId?: string
-  allSemesters?: boolean
-  providerConfig?: Record<string, unknown>
-}
-
-export interface FeatureFetchResult<TData = unknown> {
-  data: TData
-  termId?: string
-  meta?: Record<string, unknown>
-  profile?: ProviderProfile | null
-}
-
-export interface FeatureConnector<TData = unknown> {
-  fetchByCredentials(
-    input: FeatureFetchInput,
-  ): Promise<FeatureFetchResult<TData>>
-}
-
-export interface ProviderGradeItem {
-  name: string
-  credit: string
-  score: string
-  scoreLow?: boolean
-  gpa: string
-}
-
-export interface ProviderGradeSemester {
-  id: string
-  title: string
-  credit: string
-  average: string
-  gpa: string
-  expanded?: boolean
-  grades: ProviderGradeItem[]
-}
-
-export interface ProviderScoreResult {
-  summary: Array<{ label: string; value: string }>
-  semesters: ProviderGradeSemester[]
-}
-
-export type ScoreConnector = FeatureConnector<ProviderScoreResult>
-export type ProfileConnector = FeatureConnector<ProviderProfile>

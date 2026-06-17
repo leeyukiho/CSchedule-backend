@@ -9,8 +9,8 @@ import { CredentialVaultService } from '../../common/crypto/credential-vault.ser
 import { EncryptedPayload } from '../../common/crypto/encrypted-payload.type'
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { ProviderRegistryService } from '../providers/provider-registry.service'
-import { DataTarget, SchoolProvider } from '../providers/provider.types'
-import { CloudSyncWorkerService } from './cloud-sync-worker.service'
+import { DataTarget } from '../providers/provider.types'
+import { CloudCredentialSyncService } from './cloud-credential-sync.service'
 import { CourseSyncService } from './course-sync.service'
 
 export interface SyncJobResponse {
@@ -44,6 +44,7 @@ interface ManualSyncAccount {
   providerId: string
   authState: unknown
   credentialSaveMode: string
+  schoolConfig: unknown
 }
 
 interface ManualSyncTask {
@@ -112,9 +113,9 @@ export class SyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly courseSync: CourseSyncService,
+    private readonly cloudSync: CloudCredentialSyncService,
     private readonly credentialVault: CredentialVaultService,
     private readonly providers: ProviderRegistryService,
-    private readonly cloudWorker: CloudSyncWorkerService,
   ) {}
 
   async createManualSync(
@@ -124,15 +125,16 @@ export class SyncService {
   ): Promise<SyncJobResponse> {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
+      include: { school: true },
     })
 
     if (!account) {
       throw new NotFoundException('Student account not found')
     }
 
-    if (!['course', 'score', 'profile'].includes(target)) {
+    if (!['course', 'score', 'exam', 'profile'].includes(target)) {
       throw new BadRequestException(
-        'UNSUPPORTED_TARGET: only course, score and profile sync are implemented',
+        'UNSUPPORTED_TARGET: only course, score, exam and profile sync are implemented',
       )
     }
 
@@ -153,7 +155,12 @@ export class SyncService {
       return this.toSyncJobResponse(record)
     }
 
-    const support = this.getServerSyncSupport(account.providerId, target)
+    const support = this.getCloudSyncSupport({
+      providerId: account.providerId,
+      schoolConfig: account.school.config,
+      dataAccess: account.school.dataAccess,
+      target,
+    })
 
     if (!support.supported) {
       const now = new Date()
@@ -164,7 +171,7 @@ export class SyncService {
           providerId: account.providerId,
           target,
           status: 'need_webview_fetch',
-          errorCode: 'SERVER_SYNC_UNSUPPORTED',
+          errorCode: 'CLOUD_SYNC_UNSUPPORTED',
           errorMessage: support.reason,
           startedAt: now,
           finishedAt: now,
@@ -263,6 +270,7 @@ export class SyncService {
           providerId: account.providerId,
           authState: account.authState,
           credentialSaveMode: account.credentialSaveMode,
+          schoolConfig: account.school.config,
         },
         target,
         credentials,
@@ -386,64 +394,30 @@ export class SyncService {
   }
 
   private async executeManualSyncTask(task: ManualSyncTask): Promise<SyncTaskResult> {
-    if (this.cloudWorker.isEnabled()) {
-      const cloudResult = await this.cloudWorker.runProviderSync({
+    const result = await this.cloudSync.syncByCredentials({
+      schoolId: task.account.schoolId,
+      providerId: task.account.providerId,
+      target: task.target,
+      username: task.credentials.username,
+      password: task.credentials.password,
+      semesterId: task.semesterId,
+      config: task.account.schoolConfig,
+    })
+    const authStatePatch = this.getCredentialAuthStatePatch(task.account.authState)
+
+    for (const cacheResult of result.cacheResults) {
+      await this.courseSync.writeCloudCacheResult({
         accountId: task.account.id,
-        schoolId: task.account.schoolId,
-        providerId: task.account.providerId,
-        target: task.target,
-        username: task.credentials.username,
-        password: task.credentials.password,
-        semesterId: task.semesterId,
-      })
-
-      if (cloudResult.ok) {
-        const cacheData = this.getCloudWorkerCacheData(cloudResult.result)
-
-        if (!cacheData) {
-          throw new Error('CLOUD_WORKER_EMPTY_RESULT')
-        }
-
-        await this.courseSync.writeCloudCacheResult({
-          accountId: task.account.id,
-          target: task.target,
-          cacheData,
-        })
-        return { cacheData }
-      }
-
-      if (!cloudResult.unsupported) {
-        throw new Error(
-          cloudResult.errorMessage ||
-            cloudResult.errorCode ||
-            'CLOUD_WORKER_SYNC_FAILED',
-        )
-      }
-    }
-
-    if (task.target === 'course') {
-      await this.courseSync.fetchAndCacheByCredentials({
-        accountId: task.account.id,
-        username: task.credentials.username,
-        password: task.credentials.password,
-        semesterId: task.semesterId,
-        allSemesters: false,
+        target: cacheResult.target,
+        cacheData: cacheResult.cacheData,
         credentialSaveMode:
           task.account.credentialSaveMode === 'password_vault'
             ? 'password_vault'
             : 'none',
-        authStatePatch: this.getCredentialAuthStatePatch(task.account.authState),
+        authStatePatch,
       })
-      return {}
     }
 
-    await this.courseSync.fetchAndCacheFeatureByCredentials({
-      accountId: task.account.id,
-      target: task.target as Exclude<DataTarget, 'course'>,
-      username: task.credentials.username,
-      password: task.credentials.password,
-      semesterId: task.semesterId,
-    })
     return {}
   }
 
@@ -604,15 +578,20 @@ export class SyncService {
     return `${accountId}:${target}`
   }
 
-  private getServerSyncSupport(providerId: string, target: DataTarget) {
+  private getCloudSyncSupport(input: {
+    providerId: string
+    schoolConfig: unknown
+    dataAccess: unknown
+    target: DataTarget
+  }) {
     try {
-      const provider = this.providers.getProvider(providerId)
-      const accessModes = provider.meta.dataAccess?.[target] ?? []
+      const provider = this.providers.getProvider(input.providerId)
+      const accessModes = this.asDataAccessTarget(input.dataAccess, input.target)
 
-      if (!accessModes.includes('server_session')) {
+      if (!accessModes.includes('cloud_worker')) {
         return {
           supported: false,
-          reason: 'This data target is configured for frontend import only',
+          reason: 'This data target is not configured for cloud worker sync',
         }
       }
 
@@ -626,47 +605,20 @@ export class SyncService {
         }
       }
 
-      if (!this.cloudWorker.isEnabled() && !this.hasServerConnector(provider, target)) {
+      if (!this.cloudSync.isTargetConfigured(input.schoolConfig, input.target)) {
         return {
           supported: false,
-          reason: 'This provider has no backend connector for this data target',
+          reason: 'This provider has no cloud sync function for this data target',
         }
       }
 
       return { supported: true, reason: '' }
     } catch {
-      if (this.cloudWorker.isEnabled()) {
-        return { supported: true, reason: '' }
-      }
-
       return {
         supported: false,
-        reason: 'Provider is not registered for backend auto-sync',
+        reason: 'Provider is not registered for cloud auto-sync',
       }
     }
-  }
-
-  private hasServerConnector(
-    provider: SchoolProvider,
-    target: DataTarget,
-  ) {
-    if (target === 'course') {
-      return Boolean(provider.course)
-    }
-
-    if (target === 'score') {
-      return Boolean(provider.score)
-    }
-
-    if (target === 'exam') {
-      return Boolean(provider.exam)
-    }
-
-    if (target === 'profile') {
-      return Boolean(provider.profile)
-    }
-
-    return false
   }
 
   private resolveCredentials(
@@ -721,6 +673,7 @@ export class SyncService {
     const lowerMessage = message.toLowerCase()
 
     if (
+      message.includes('WTBU_INVALID_CREDENTIALS') ||
       lowerMessage.includes('invalid credential') ||
       message.includes('密码错误') ||
       message.includes('用户名或密码') ||
@@ -729,6 +682,22 @@ export class SyncService {
       return {
         status: 'need_login',
         errorCode: 'INVALID_CREDENTIAL',
+        errorMessage: message,
+      }
+    }
+
+    if (message.includes('CLOUD_SYNC_NOT_CONFIGURED')) {
+      return {
+        status: 'need_webview_fetch',
+        errorCode: 'CLOUD_SYNC_NOT_CONFIGURED',
+        errorMessage: message,
+      }
+    }
+
+    if (message.includes('CLOUD_SYNC_EMPTY_RESULT')) {
+      return {
+        status: 'failed',
+        errorCode: 'CLOUD_SYNC_EMPTY_RESULT',
         errorMessage: message,
       }
     }
@@ -798,18 +767,15 @@ export class SyncService {
       : {}
   }
 
+  private asDataAccessTarget(value: unknown, target: DataTarget) {
+    const source = this.asRecord(value)
+    const access = source[target]
+
+    return Array.isArray(access) ? access.filter((item) => typeof item === 'string') : []
+  }
+
   private asArray(value: unknown) {
     return Array.isArray(value) ? value : []
   }
 
-  private getCloudWorkerCacheData(value: unknown) {
-    const record = this.asRecord(value)
-    const cacheData = this.asRecord(record.cacheData)
-
-    if (Object.keys(cacheData).length > 0) {
-      return cacheData
-    }
-
-    return Object.keys(record).length > 0 ? record : null
-  }
 }
