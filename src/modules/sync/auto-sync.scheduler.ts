@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 
 import { PrismaService } from '../../common/prisma/prisma.service'
 import { ProviderRegistryService } from '../providers/provider-registry.service'
@@ -29,6 +29,7 @@ function parseTargets(value?: string): DataTarget[] {
 
 @Injectable()
 export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(AutoSyncScheduler.name)
   private timer: NodeJS.Timeout | null = null
   private running = false
   private readonly enabled = process.env.AUTO_SYNC_ENABLED === 'true'
@@ -96,17 +97,23 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
       })
 
       for (const account of accounts) {
-        const targets = this.targets.filter((target) =>
-          this.canScheduleProvider(
-              account.providerId,
-              account.school.dataAccess,
-              account.school.config,
-              target,
-          ),
-        )
+        try {
+          const targets = this.targets.filter((target) =>
+            this.canScheduleProvider(
+                account.providerId,
+                account.school.dataAccess,
+                account.school.config,
+                target,
+            ),
+          )
 
-        if (targets.length > 0) {
-          await this.syncService.createManualSync(account.id, { targets })
+          if (targets.length > 0) {
+            await this.syncService.createManualSync(account.id, { targets })
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to schedule auto sync for account ${account.id}: ${this.getErrorMessage(error)}`,
+          )
         }
       }
     } finally {
@@ -141,5 +148,9 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
     const access = source[target]
 
     return Array.isArray(access) ? access.filter((item) => typeof item === 'string') : []
+  }
+
+  private getErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error || 'Unknown error')
   }
 }

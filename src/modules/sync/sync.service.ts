@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
+  OnModuleInit,
   NotFoundException,
 } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
@@ -89,7 +91,8 @@ function getPositiveIntegerEnv(name: string, fallback: number) {
 }
 
 @Injectable()
-export class SyncService {
+export class SyncService implements OnModuleInit {
+  private readonly logger = new Logger(SyncService.name)
   private readonly globalSyncConcurrency = getPositiveIntegerEnv(
     'SYNC_GLOBAL_CONCURRENCY',
     DEFAULT_GLOBAL_SYNC_CONCURRENCY,
@@ -119,6 +122,14 @@ export class SyncService {
     private readonly providers: ProviderRegistryService,
     private readonly providerDisplay: ProviderDisplayService,
   ) {}
+
+  async onModuleInit() {
+    const result = await this.expireInterruptedSyncJobs()
+
+    if (result.count > 0) {
+      this.logger.warn(`Recovered ${result.count} interrupted sync job(s) on startup`)
+    }
+  }
 
   async createManualSync(
     accountId: string,
@@ -375,7 +386,11 @@ export class SyncService {
     }
 
     try {
-      const result = await this.executeManualSyncTask(task)
+      await this.withTimeout(
+        this.executeManualSyncTask(task),
+        this.staleSyncJobMs,
+        'SYNC_TASK_TIMEOUT',
+      )
       await this.prisma.syncRecord.update({
         where: { id: task.recordId },
         data: {
@@ -425,13 +440,13 @@ export class SyncService {
 
   }
 
-  private async expireStaleSyncJobs(accountId: string, target: DataTarget) {
+  private async expireStaleSyncJobs(accountId?: string, target?: DataTarget) {
     const cutoff = new Date(Date.now() - this.staleSyncJobMs)
 
-    await this.prisma.syncRecord.updateMany({
+    return this.prisma.syncRecord.updateMany({
       where: {
-        accountId,
-        target,
+        ...(accountId ? { accountId } : {}),
+        ...(target ? { target } : {}),
         status: { in: ACTIVE_SYNC_STATUSES },
         OR: [
           { startedAt: { lt: cutoff } },
@@ -444,6 +459,37 @@ export class SyncService {
         errorMessage: 'Sync job expired before completion',
         finishedAt: new Date(),
       },
+    })
+  }
+
+  private async expireInterruptedSyncJobs() {
+    return this.prisma.syncRecord.updateMany({
+      where: {
+        status: { in: ACTIVE_SYNC_STATUSES },
+      },
+      data: {
+        status: 'failed',
+        errorCode: 'SYNC_JOB_INTERRUPTED',
+        errorMessage: 'Sync job was interrupted by service restart',
+        finishedAt: new Date(),
+      },
+    })
+  }
+
+  private withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+  ): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+    })
+
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timer) {
+        clearTimeout(timer)
+      }
     })
   }
 
@@ -785,6 +831,14 @@ export class SyncService {
         status: 'failed',
         errorCode: 'CLOUD_SYNC_EMPTY_RESULT',
         errorMessage: message,
+      }
+    }
+
+    if (message.includes('SYNC_TASK_TIMEOUT')) {
+      return {
+        status: 'failed',
+        errorCode: 'SYNC_TASK_TIMEOUT',
+        errorMessage: 'Sync task timed out before completion',
       }
     }
 
