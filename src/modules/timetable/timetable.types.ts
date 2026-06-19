@@ -14,6 +14,7 @@ export interface TimetableCacheDataResponse {
   termId?: string
   courses: unknown[]
   terms: unknown[]
+  termStarts?: Record<string, string>
   sectionTimes: unknown[]
   display?: FeatureDisplayConfig
   sourceHash?: string
@@ -24,6 +25,7 @@ export interface TimetableCacheDataResponse {
 
 export interface TimetableNotModifiedResponse {
   termId?: string
+  termStarts?: Record<string, string>
   sourceHash?: string
   notModified: true
   syncedAt?: string

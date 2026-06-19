@@ -37,6 +37,10 @@ export class TimetableService {
       throw new NotFoundException('Student account not found')
     }
 
+    const configuredSectionTimes = this.providerDisplay.getSectionTimes(
+      account.school.config,
+      account.providerId,
+    )
     const cache = await this.prisma.courseCache.findFirst({
       where: {
         accountId,
@@ -44,9 +48,17 @@ export class TimetableService {
       },
       orderBy: { syncedAt: 'desc' },
     })
-    if (cache?.sourceHash && knownHash && knownHash === cache.sourceHash) {
+    const cacheSectionTimes = this.asArray(cache?.sectionTimesJson)
+
+    if (
+      cache?.sourceHash &&
+      knownHash &&
+      knownHash === cache.sourceHash &&
+      (cacheSectionTimes.length || !configuredSectionTimes.length)
+    ) {
       return {
         termId: this.cleanTermLabel(cache.termId ?? termId),
+        termStarts: this.getTermStarts(account.school.config),
         sourceHash: cache.sourceHash,
         notModified: true,
         syncedAt: cache.syncedAt.toISOString(),
@@ -79,7 +91,8 @@ export class TimetableService {
       termId: canonicalTermId,
       courses: this.asArray(cache?.coursesJson),
       terms: terms.map((term) => this.cleanTermRecord(term)),
-      sectionTimes: this.asArray(cache?.sectionTimesJson),
+      termStarts: this.getTermStarts(account.school.config),
+      sectionTimes: cacheSectionTimes.length ? cacheSectionTimes : configuredSectionTimes,
       display,
       sourceHash: cache?.sourceHash,
       syncedAt: cache?.syncedAt.toISOString(),
@@ -202,6 +215,14 @@ export class TimetableService {
     const record = this.asRecord(value)
     const id = this.cleanTermLabel(record.id)
     const label = this.cleanTermLabel(record.label ?? record.title ?? record.name ?? record.id)
+    const rawLabel =
+      typeof record.rawLabel === 'string'
+        ? record.rawLabel
+        : typeof record.label === 'string'
+          ? record.label
+          : typeof record.title === 'string'
+            ? record.title
+            : undefined
     const cleanRecord = { ...record }
 
     if (!label) {
@@ -212,6 +233,7 @@ export class TimetableService {
     return {
       ...cleanRecord,
       ...(id ? { id } : {}),
+      ...(rawLabel ? { rawLabel } : {}),
       ...(label ? { label, title: label } : {}),
     }
   }
@@ -291,7 +313,7 @@ export class TimetableService {
 
         if (match) {
           const semester = match[3] === '2' || match[3] === '二' || match[3] === '两' || match[3] === '下' ? '2' : '1'
-          return `${match[1]}-${match[2]}学年第${semester}学期`
+          return `${match[1]}-${match[2]} 第${semester}学期`
         }
       }
     }
@@ -326,5 +348,19 @@ export class TimetableService {
     return value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {}
+  }
+
+  private getTermStarts(config: unknown) {
+    const termStarts = this.asRecord(config).termStarts
+    const record = this.asRecord(termStarts)
+    const result: Record<string, string> = {}
+
+    for (const [termId, date] of Object.entries(record)) {
+      if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        result[termId] = date
+      }
+    }
+
+    return result
   }
 }

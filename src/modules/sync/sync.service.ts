@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client'
 import { CredentialVaultService } from '../../common/crypto/credential-vault.service'
 import { EncryptedPayload } from '../../common/crypto/encrypted-payload.type'
 import { PrismaService } from '../../common/prisma/prisma.service'
+import { ProviderDisplayService } from '../providers/provider-display.service'
 import { ProviderRegistryService } from '../providers/provider-registry.service'
 import { DataTarget } from '../providers/provider.types'
 import { CloudCredentialSyncService } from './cloud-credential-sync.service'
@@ -33,7 +34,10 @@ export interface SyncJobResponse {
   runningAhead?: number
   errorCode?: string
   errorMessage?: string
-  cacheData?: Record<string, unknown>
+  cacheResults?: Array<{
+    target: DataTarget
+    cacheData: Record<string, unknown>
+  }>
 }
 
 type SyncStatus = SyncJobResponse['status']
@@ -52,6 +56,7 @@ interface ManualSyncTask {
   recordId: string
   account: ManualSyncAccount
   target: DataTarget
+  targets: DataTarget[]
   credentials: {
     username: string
     password: string
@@ -71,15 +76,11 @@ interface SyncRecordSnapshot {
   createdAt: Date
 }
 
-interface SyncTaskResult {
-  cacheData?: Record<string, unknown>
-}
-
 const ACTIVE_SYNC_STATUSES: SyncStatus[] = ['pending', 'running']
 const DEFAULT_GLOBAL_SYNC_CONCURRENCY = 2
 const DEFAULT_SCHOOL_SYNC_CONCURRENCY = 1
 const DEFAULT_STALE_SYNC_JOB_MS = 20 * 60 * 1000
-const DEFAULT_ACCOUNT_SYNC_COOLDOWN_MS = 5 * 60 * 1000
+const DEFAULT_ACCOUNT_SYNC_COOLDOWN_MS = 10 * 60 * 1000
 
 function getPositiveIntegerEnv(name: string, fallback: number) {
   const value = Number(process.env[name])
@@ -116,12 +117,12 @@ export class SyncService {
     private readonly cloudSync: CloudCredentialSyncService,
     private readonly credentialVault: CredentialVaultService,
     private readonly providers: ProviderRegistryService,
+    private readonly providerDisplay: ProviderDisplayService,
   ) {}
 
   async createManualSync(
     accountId: string,
-    target: DataTarget,
-    input: { username?: string; password?: string; semesterId?: string } = {},
+    input: { username?: string; password?: string; semesterId?: string; targets?: DataTarget[] } = {},
   ): Promise<SyncJobResponse> {
     const account = await this.prisma.studentAccount.findUnique({
       where: { id: accountId },
@@ -132,9 +133,12 @@ export class SyncService {
       throw new NotFoundException('Student account not found')
     }
 
-    if (!['course', 'score', 'exam', 'profile'].includes(target)) {
+    const targets = this.normalizeTargets(input.targets)
+    const target = targets[0]
+
+    if (!target || targets.length === 0) {
       throw new BadRequestException(
-        'UNSUPPORTED_TARGET: only course, score, exam and profile sync are implemented',
+        'UNSUPPORTED_TARGETS: targets must include course, score, exam or profile',
       )
     }
 
@@ -159,7 +163,7 @@ export class SyncService {
       providerId: account.providerId,
       schoolConfig: account.school.config,
       dataAccess: account.school.dataAccess,
-      target,
+      targets,
     })
 
     if (!support.supported) {
@@ -273,6 +277,7 @@ export class SyncService {
           schoolConfig: account.school.config,
         },
         target,
+        targets,
         credentials,
         semesterId: input.semesterId,
       })
@@ -393,11 +398,11 @@ export class SyncService {
     }
   }
 
-  private async executeManualSyncTask(task: ManualSyncTask): Promise<SyncTaskResult> {
+  private async executeManualSyncTask(task: ManualSyncTask): Promise<void> {
     const result = await this.cloudSync.syncByCredentials({
       schoolId: task.account.schoolId,
       providerId: task.account.providerId,
-      target: task.target,
+      targets: task.targets,
       username: task.credentials.username,
       password: task.credentials.password,
       semesterId: task.semesterId,
@@ -418,7 +423,6 @@ export class SyncService {
       })
     }
 
-    return {}
   }
 
   private async expireStaleSyncJobs(accountId: string, target: DataTarget) {
@@ -456,24 +460,34 @@ export class SyncService {
     return record ? this.toSyncJobResponse(record) : null
   }
 
-  private async getLatestCacheData(accountId: string, target: DataTarget) {
-    const account = await this.prisma.studentAccount.findUnique({
-      where: { id: accountId },
-      select: {
-        id: true,
-        schoolId: true,
-        providerId: true,
-        status: true,
-        sessionReusable: true,
-        sessionRefreshable: true,
-        sessionExpireAt: true,
-      },
-    })
-
-    if (!account) {
+  private getLatestCacheData(
+    account: {
+      id: string
+      schoolId: string
+      providerId: string
+      status: SyncStatus | string
+      sessionReusable: boolean
+      sessionRefreshable: boolean
+      sessionExpireAt: Date | null
+      school: { config: Prisma.JsonValue }
+    },
+    target: DataTarget,
+    cache?: {
+      termId: string | null
+      coursesJson?: unknown
+      termsJson?: unknown
+      sectionTimesJson?: unknown
+      dataJson?: unknown
+      metaJson?: unknown
+      sourceHash: string
+      syncedAt: Date
+    } | null,
+  ) {
+    if (!cache) {
       return null
     }
 
+    const accountId = account.id
     const session = {
       sessionReusable: account.sessionReusable,
       sessionRefreshable: account.sessionRefreshable,
@@ -482,14 +496,11 @@ export class SyncService {
     }
 
     if (target === 'course') {
-      const cache = await this.prisma.courseCache.findFirst({
-        where: { accountId },
-        orderBy: { syncedAt: 'desc' },
-      })
-
-      if (!cache) {
-        return null
-      }
+      const cacheSectionTimes = this.asArray(cache.sectionTimesJson)
+      const configuredSectionTimes = this.providerDisplay.getSectionTimes(
+        account.school.config,
+        account.providerId,
+      )
 
       return {
         accountId,
@@ -498,20 +509,11 @@ export class SyncService {
         termId: cache.termId ?? undefined,
         courses: this.asArray(cache.coursesJson),
         terms: this.asArray(cache.termsJson),
-        sectionTimes: this.asArray(cache.sectionTimesJson),
+        sectionTimes: cacheSectionTimes.length ? cacheSectionTimes : configuredSectionTimes,
         sourceHash: cache.sourceHash,
         syncedAt: cache.syncedAt.toISOString(),
         session,
       }
-    }
-
-    const cache = await this.prisma.featureCache.findFirst({
-      where: { accountId, target },
-      orderBy: { syncedAt: 'desc' },
-    })
-
-    if (!cache) {
-      return null
     }
 
     return {
@@ -528,6 +530,71 @@ export class SyncService {
     }
   }
 
+  private async getLatestCacheResults(accountId: string): Promise<NonNullable<SyncJobResponse['cacheResults']>> {
+    const account = await this.prisma.studentAccount.findUnique({
+      where: { id: accountId },
+      select: {
+        id: true,
+        schoolId: true,
+        providerId: true,
+        status: true,
+        sessionReusable: true,
+        sessionRefreshable: true,
+        sessionExpireAt: true,
+        school: {
+          select: {
+            config: true,
+          },
+        },
+      },
+    })
+
+    if (!account) {
+      return []
+    }
+
+    const [courseCache, featureCaches] = await Promise.all([
+      this.prisma.courseCache.findFirst({
+        where: { accountId },
+        orderBy: { syncedAt: 'desc' },
+      }),
+      this.prisma.featureCache.findMany({
+        where: { accountId, target: { in: ['profile', 'score', 'exam'] } },
+        orderBy: [{ target: 'asc' }, { syncedAt: 'desc' }],
+      }),
+    ])
+    const latestFeatureCacheByTarget = new Map<DataTarget, (typeof featureCaches)[number]>()
+
+    for (const cache of featureCaches) {
+      if (!latestFeatureCacheByTarget.has(cache.target)) {
+        latestFeatureCacheByTarget.set(cache.target, cache)
+      }
+    }
+
+    const cacheResults = [
+      {
+        target: 'course' as DataTarget,
+        cacheData: this.getLatestCacheData(account, 'course', courseCache),
+      },
+      ...(['profile', 'score', 'exam'] as DataTarget[]).map((target) => ({
+        target,
+        cacheData: this.getLatestCacheData(account, target, latestFeatureCacheByTarget.get(target)),
+      })),
+    ]
+    const results: NonNullable<SyncJobResponse['cacheResults']> = []
+
+    for (const result of cacheResults) {
+      if (result.cacheData) {
+        results.push({
+          target: result.target,
+          cacheData: result.cacheData as Record<string, unknown>,
+        })
+      }
+    }
+
+    return results
+  }
+
   private async toSyncJobResponseWithCache(record: SyncRecordSnapshot): Promise<SyncJobResponse> {
     const response = this.toSyncJobResponse(record)
 
@@ -535,9 +602,12 @@ export class SyncService {
       return response
     }
 
-    const cacheData = await this.getLatestCacheData(record.accountId, record.target)
+    const cacheResults = await this.getLatestCacheResults(record.accountId)
 
-    return cacheData ? { ...response, cacheData } : response
+    return {
+      ...response,
+      ...(cacheResults.length ? { cacheResults } : {}),
+    }
   }
 
   private toSyncJobResponse(record: SyncRecordSnapshot): SyncJobResponse {
@@ -582,18 +652,10 @@ export class SyncService {
     providerId: string
     schoolConfig: unknown
     dataAccess: unknown
-    target: DataTarget
+    targets: DataTarget[]
   }) {
     try {
       const provider = this.providers.getProvider(input.providerId)
-      const accessModes = this.asDataAccessTarget(input.dataAccess, input.target)
-
-      if (!accessModes.includes('cloud_worker')) {
-        return {
-          supported: false,
-          reason: 'This data target is not configured for cloud worker sync',
-        }
-      }
 
       if (
         !provider.meta.credentialSave ||
@@ -605,17 +667,33 @@ export class SyncService {
         }
       }
 
-      if (!this.cloudSync.isTargetConfigured(input.schoolConfig, input.target)) {
-        return {
-          supported: false,
-          reason: 'This provider has no cloud sync function for this data target',
+      for (const target of input.targets) {
+        const accessModes = this.asDataAccessTarget(input.dataAccess, target)
+
+        if (!accessModes.includes('cloud_worker')) {
+          return {
+            supported: false,
+            reason: `Data target ${target} is not configured for cloud worker sync`,
+          }
         }
       }
 
-      if (!this.cloudSync.canRunTarget(input.schoolConfig, input.target)) {
+      const cloudFunction = this.cloudSync.getSharedCloudFunction(
+        input.schoolConfig,
+        input.targets,
+      )
+
+      if (!cloudFunction) {
         return {
           supported: false,
-          reason: 'Cloud sync environment is not configured for this data target',
+          reason: 'Requested data targets have no shared cloud sync function',
+        }
+      }
+
+      if (!this.canRunCloudFunction(cloudFunction)) {
+        return {
+          supported: false,
+          reason: 'Cloud sync environment is not configured for requested data targets',
         }
       }
 
@@ -710,6 +788,20 @@ export class SyncService {
     }
 
     if (
+      message.includes('SIGN_PARAM_INVALID') ||
+      lowerMessage.includes('tmp secret key expire') ||
+      lowerMessage.includes('temporary key') ||
+      lowerMessage.includes('session token')
+    ) {
+      return {
+        status: 'need_webview_fetch',
+        errorCode: 'CLOUD_SYNC_CREDENTIAL_EXPIRED',
+        errorMessage:
+          'CloudBase credential expired. Remove the expired TENCENTCLOUD_SESSIONTOKEN or refresh Tencent Cloud temporary credentials.',
+      }
+    }
+
+    if (
       lowerMessage.includes('captcha') ||
       message.includes('验证码') ||
       message.includes('扫码')
@@ -783,6 +875,30 @@ export class SyncService {
 
   private asArray(value: unknown) {
     return Array.isArray(value) ? value : []
+  }
+
+  private normalizeTargets(targets: DataTarget[] | undefined) {
+    if (targets === undefined) {
+      return ['course'] as DataTarget[]
+    }
+
+    const normalized = Array.isArray(targets)
+      ? targets.filter((target): target is DataTarget =>
+          ['course', 'score', 'exam', 'profile'].includes(target),
+        )
+      : []
+
+    return [...new Set(normalized)]
+  }
+
+  private canRunCloudFunction(cloudFunction: { functionName?: string; url?: string }) {
+    return Boolean(
+      cloudFunction.url ||
+        (cloudFunction.functionName &&
+          (process.env.CLOUDBASE_ENV_ID ||
+            process.env.TCB_ENV_ID ||
+            process.env.TARO_APP_CLOUDBASE_ENV_ID)),
+    )
   }
 
 }

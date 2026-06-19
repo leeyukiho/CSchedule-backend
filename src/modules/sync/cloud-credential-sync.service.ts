@@ -18,7 +18,7 @@ export interface CloudCredentialCacheResult {
 }
 
 export interface CloudCredentialSyncResult {
-  target: DataTarget
+  targets?: DataTarget[]
   termId?: string
   cacheResults: CloudCredentialCacheResult[]
   parsedCount?: number
@@ -39,7 +39,7 @@ interface CloudCredentialSyncPayload {
   source: 'backend_auto_sync'
   schoolId: string
   providerId: string
-  target: DataTarget
+  targets: DataTarget[]
   username: string
   password: string
   semesterId?: string
@@ -49,6 +49,7 @@ interface CloudCredentialSyncPayload {
 @Injectable()
 export class CloudCredentialSyncService {
   private app: ReturnType<typeof cloudbase.init> | null = null
+  private appCredentialSignature = ''
 
   isTargetConfigured(config: unknown, target: DataTarget) {
     return Boolean(this.getCloudFunction(config, target))
@@ -66,17 +67,25 @@ export class CloudCredentialSyncService {
   async syncByCredentials(input: {
     schoolId: string
     providerId: string
-    target: DataTarget
+    targets: DataTarget[]
     username: string
     password: string
     semesterId?: string
     config: unknown
   }): Promise<CloudCredentialSyncResult> {
-    const cloudFunction = this.getCloudFunction(input.config, input.target)
+    const targets = this.normalizeTargets(input.targets)
+
+    if (!targets.length) {
+      throw new BadRequestException(
+        'CLOUD_SYNC_TARGETS_INVALID: at least one target is required',
+      )
+    }
+
+    const cloudFunction = this.getSharedCloudFunction(input.config, targets)
 
     if (!cloudFunction) {
       throw new BadRequestException(
-        'CLOUD_SYNC_NOT_CONFIGURED: this target has no cloud sync function',
+        'CLOUD_SYNC_NOT_CONFIGURED: requested targets have no shared cloud sync function',
       )
     }
 
@@ -84,7 +93,7 @@ export class CloudCredentialSyncService {
       source: 'backend_auto_sync',
       schoolId: input.schoolId,
       providerId: input.providerId,
-      target: input.target,
+      targets,
       username: input.username,
       password: input.password,
       ...(input.semesterId ? { semesterId: input.semesterId } : {}),
@@ -104,6 +113,25 @@ export class CloudCredentialSyncService {
 
   getCloudFunction(config: unknown, target: DataTarget) {
     return this.getCloudSyncFunctions(config)[target]
+  }
+
+  getSharedCloudFunction(config: unknown, targets: DataTarget[]) {
+    const functions = this.getCloudSyncFunctions(config)
+    const configured = targets.map((target) => functions[target])
+
+    if (configured.some((item) => !item)) {
+      return undefined
+    }
+
+    const [first] = configured
+
+    if (!first) {
+      return undefined
+    }
+
+    return configured.every((item) => this.isSameCloudFunction(first, item))
+      ? first
+      : undefined
   }
 
   getCloudSyncFunctions(config: unknown): CloudSyncFunctionMap {
@@ -195,22 +223,63 @@ export class CloudCredentialSyncService {
   }
 
   private getCloudBaseApp(env: string) {
-    if (!this.app) {
+    const credentials = this.getCloudBaseCredentials()
+    const credentialSignature = JSON.stringify(credentials)
+
+    if (!this.app || this.appCredentialSignature !== credentialSignature) {
+      this.clearSessionTokenEnvWhenUsingLongLivedCredentials()
       this.app = cloudbase.init({
         env,
-        ...(process.env.TENCENTCLOUD_SECRETID
-          ? { secretId: process.env.TENCENTCLOUD_SECRETID }
-          : {}),
-        ...(process.env.TENCENTCLOUD_SECRETKEY
-          ? { secretKey: process.env.TENCENTCLOUD_SECRETKEY }
-          : {}),
-        ...(process.env.TENCENTCLOUD_SESSIONTOKEN
-          ? { sessionToken: process.env.TENCENTCLOUD_SESSIONTOKEN }
-          : {}),
+        ...credentials,
       })
+      this.appCredentialSignature = credentialSignature
     }
 
     return this.app
+  }
+
+  private getCloudBaseCredentials() {
+    const secretId = process.env.TENCENTCLOUD_SECRETID
+    const secretKey = process.env.TENCENTCLOUD_SECRETKEY
+
+    return {
+      ...(secretId ? { secretId } : {}),
+      ...(secretKey ? { secretKey } : {}),
+      ...(!secretId && !secretKey && this.hasUsableSessionToken()
+        ? { sessionToken: process.env.TENCENTCLOUD_SESSIONTOKEN }
+        : {}),
+    }
+  }
+
+  private clearSessionTokenEnvWhenUsingLongLivedCredentials() {
+    if (!process.env.TENCENTCLOUD_SECRETID || !process.env.TENCENTCLOUD_SECRETKEY) {
+      return
+    }
+
+    delete process.env.TENCENTCLOUD_SESSIONTOKEN
+    delete process.env.TENCENTCLOUD_CREDENTIAL_EXPIRES_AT
+  }
+
+  private hasUsableSessionToken() {
+    if (!process.env.TENCENTCLOUD_SESSIONTOKEN) {
+      return false
+    }
+
+    const expiresAt = this.getCredentialExpiresAt()
+
+    return !expiresAt || expiresAt.getTime() > Date.now() + 60_000
+  }
+
+  private getCredentialExpiresAt() {
+    const rawValue = process.env.TENCENTCLOUD_CREDENTIAL_EXPIRES_AT
+
+    if (!rawValue) {
+      return null
+    }
+
+    const expiresAt = new Date(rawValue)
+
+    return Number.isNaN(expiresAt.getTime()) ? null : expiresAt
   }
 
   private getCloudBaseEnv() {
@@ -278,6 +347,26 @@ export class CloudCredentialSyncService {
     const record = this.asRecord(data)
 
     return String(record.errorMessage || record.errorCode || '').trim()
+  }
+
+  private normalizeTargets(targets: DataTarget[]) {
+    return [...new Set(
+      (Array.isArray(targets) ? targets : []).filter((target): target is DataTarget =>
+        ['course', 'score', 'exam', 'profile'].includes(target),
+      ),
+    )]
+  }
+
+  private isSameCloudFunction(
+    left: CloudSyncFunctionConfig | undefined,
+    right: CloudSyncFunctionConfig | undefined,
+  ) {
+    return Boolean(
+      left &&
+        right &&
+        (left.functionName || '') === (right.functionName || '') &&
+        (left.url || '') === (right.url || ''),
+    )
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

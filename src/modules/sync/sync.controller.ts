@@ -20,12 +20,11 @@ export class SyncController {
 export class AccountSyncController {
   constructor(private readonly syncService: SyncService) {}
 
-  @Post(':target')
+  @Post()
   createManualSync(
     @Param('accountId') accountId: string,
-    @Param('target') target: DataTarget,
-    @Body() input: { username?: string; password?: string; semesterId?: string } = {},
+    @Body() input: { username?: string; password?: string; semesterId?: string; targets?: DataTarget[] } = {},
   ) {
-    return this.syncService.createManualSync(accountId, target, input)
+    return this.syncService.createManualSync(accountId, input)
   }
 }

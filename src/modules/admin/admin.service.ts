@@ -17,6 +17,7 @@ export interface AdminSchoolUpdateInput {
   authConfig?: Record<string, unknown> | null
   providerConfig?: Record<string, unknown> | null
   providerStatus?: SchoolStatus
+  termStarts?: Record<string, string>
   note?: string
 }
 
@@ -72,7 +73,10 @@ export class AdminService {
     ])
 
     return {
-      items: schools,
+      items: schools.map((school) => ({
+        ...school,
+        termStarts: this.getTermStarts(school.config),
+      })),
       total,
       limit,
       offset,
@@ -102,12 +106,14 @@ export class AdminService {
     if (
       input.note ||
       input.authConfig !== undefined ||
-      input.providerConfig !== undefined
+      input.providerConfig !== undefined ||
+      input.termStarts !== undefined
     ) {
       data.config = await this.mergeSchoolConfig(schoolId, {
         note: input.note,
         authConfig: input.authConfig,
         providerConfig: input.providerConfig,
+        termStarts: input.termStarts,
       })
     }
 
@@ -220,9 +226,33 @@ export class AdminService {
       }),
       this.prisma.feedbackItem.count({ where: where as any }),
     ])
+    const accountIds = [...new Set(items.map((item) => item.accountId).filter(Boolean))]
+    const accounts = accountIds.length
+      ? await this.prisma.studentAccount.findMany({
+          where: { id: { in: accountIds as string[] } },
+          select: {
+            id: true,
+            schoolId: true,
+            providerId: true,
+            displayName: true,
+            status: true,
+            school: {
+              select: {
+                id: true,
+                name: true,
+                shortName: true,
+              },
+            },
+          },
+        })
+      : []
+    const accountMap = new Map(accounts.map((account) => [account.id, account]))
 
     return {
-      items,
+      items: items.map((item) => ({
+        ...item,
+        account: item.accountId ? accountMap.get(item.accountId) ?? null : null,
+      })),
       total,
       limit,
       offset,
@@ -256,6 +286,7 @@ export class AdminService {
       note?: string
       authConfig?: Record<string, unknown> | null
       providerConfig?: Record<string, unknown> | null
+      termStarts?: Record<string, string>
     },
   ) {
     const school = await this.prisma.school.findUnique({ where: { id: schoolId } })
@@ -275,7 +306,42 @@ export class AdminService {
       nextConfig.provider = input.providerConfig
     }
 
+    if (input.termStarts !== undefined) {
+      nextConfig.termStarts = this.normalizeTermStarts(input.termStarts)
+    }
+
     return this.toJson(nextConfig)
+  }
+
+  private normalizeTermStarts(value: Record<string, string>) {
+    const result: Record<string, string> = {}
+
+    for (const [termId, date] of Object.entries(value || {})) {
+      if (termId && /^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+        result[termId] = date
+      }
+    }
+
+    return result
+  }
+
+  private getTermStarts(config: unknown) {
+    const record = this.asRecord(this.asRecord(config).termStarts)
+    const result: Record<string, string> = {}
+
+    for (const [termId, date] of Object.entries(record)) {
+      if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        result[termId] = date
+      }
+    }
+
+    return result
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

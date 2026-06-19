@@ -1,5 +1,21 @@
 import { SchoolProvider } from '../provider.types'
 
+const WTBU_SECTION_TIMES = [
+  { section: 1, start: '08:20', end: '09:05' },
+  { section: 2, start: '09:15', end: '10:00' },
+  { section: 3, start: '10:20', end: '11:05' },
+  { section: 4, start: '11:15', end: '12:00' },
+  { section: 5, start: '12:10', end: '12:55' },
+  { section: 6, start: '13:05', end: '13:50' },
+  { section: 7, start: '14:10', end: '14:55' },
+  { section: 8, start: '15:05', end: '15:50' },
+  { section: 9, start: '16:10', end: '16:55' },
+  { section: 10, start: '17:05', end: '17:50' },
+  { section: 11, start: '18:30', end: '19:15' },
+  { section: 12, start: '19:20', end: '20:10' },
+  { section: 13, start: '20:20', end: '21:05' },
+]
+
 export const wtbuProvider: SchoolProvider = {
   id: 'wtbu',
   meta: {
@@ -27,6 +43,7 @@ export const wtbuProvider: SchoolProvider = {
       exam: ['cloud_worker', 'webview_client_fetch', 'manual_import'],
       profile: ['cloud_worker', 'webview_client_fetch', 'manual_import'],
     },
+    sectionTimes: WTBU_SECTION_TIMES,
     featureDisplay: {
       course: {
         title: '课表',

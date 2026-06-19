@@ -96,19 +96,17 @@ export class AutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
       })
 
       for (const account of accounts) {
-        for (const target of this.targets) {
-          if (
-            !this.canScheduleProvider(
+        const targets = this.targets.filter((target) =>
+          this.canScheduleProvider(
               account.providerId,
               account.school.dataAccess,
               account.school.config,
               target,
-            )
-          ) {
-            continue
-          }
+          ),
+        )
 
-          await this.syncService.createManualSync(account.id, target)
+        if (targets.length > 0) {
+          await this.syncService.createManualSync(account.id, { targets })
         }
       }
     } finally {

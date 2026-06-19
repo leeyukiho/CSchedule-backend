@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common'
 import { Prisma } from '@prisma/client'
 
-import { DataTarget, FeatureDisplayConfig, FeatureDisplayField } from './provider.types'
+import {
+  DataTarget,
+  FeatureDisplayConfig,
+  FeatureDisplayField,
+  SectionTimeConfig,
+} from './provider.types'
 import { ProviderRegistryService } from './provider-registry.service'
 
 const PROFILE_EDITABLE_FIELDS = [
@@ -36,6 +41,25 @@ export class ProviderDisplayService {
       this.getProviderDisplay(providerId, target) ??
       this.getDefaultDisplay(target)
     )
+  }
+
+  getSectionTimes(
+    schoolConfig: Prisma.JsonValue | null,
+    providerId: string,
+  ): SectionTimeConfig[] {
+    const config = this.asRecord(schoolConfig)
+    const provider = this.asRecord(config.provider)
+    const schoolTimes = this.asSectionTimes(config.sectionTimes ?? provider.sectionTimes)
+
+    if (schoolTimes.length) {
+      return schoolTimes
+    }
+
+    try {
+      return this.asSectionTimes(this.providers.getProvider(providerId).meta.sectionTimes)
+    } catch {
+      return []
+    }
   }
 
   private getSchoolDisplay(schoolConfig: Prisma.JsonValue | null, target: DataTarget) {
@@ -182,6 +206,45 @@ export class ProviderDisplayService {
     }, [])
 
     return fields.length ? fields : undefined
+  }
+
+  private asSectionTimes(value: unknown): SectionTimeConfig[] {
+    if (!Array.isArray(value)) {
+      return []
+    }
+
+    return value.reduce<SectionTimeConfig[]>((result, item, index) => {
+      const source = this.asRecord(item)
+      const section = Number(
+        source.section ??
+          source.index ??
+          source.no ??
+          source.id ??
+          source.lesson ??
+          source.period ??
+          index + 1,
+      )
+      const start = typeof source.start === 'string'
+        ? source.start.trim()
+        : typeof source.startTime === 'string'
+          ? source.startTime.trim()
+          : typeof source.begin === 'string'
+            ? source.begin.trim()
+            : ''
+      const end = typeof source.end === 'string'
+        ? source.end.trim()
+        : typeof source.endTime === 'string'
+          ? source.endTime.trim()
+          : typeof source.finish === 'string'
+            ? source.finish.trim()
+            : ''
+
+      if (Number.isInteger(section) && section > 0 && start && end) {
+        result.push({ section, start, end })
+      }
+
+      return result
+    }, [])
   }
 
   private asRecord(value: unknown): Record<string, unknown> {
