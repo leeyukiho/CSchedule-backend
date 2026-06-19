@@ -11,12 +11,21 @@ export const whhxitProvider: SchoolProvider = {
     eduSystemType: 'zf_jwglxt',
     status: 'enabled',
     verifiedAt: '2026-06-12T00:00:00.000Z',
-    capabilities: { course: true, score: false, exam: false, profile: true },
+    capabilities: { course: true, score: true, exam: true, profile: true },
+    credentialSave: {
+      passwordVaultAllowed: true,
+      autoSync: 'password_login',
+      scheduledSyncSupported: true,
+      title: '支持保存登录信息',
+      notice:
+        '保存教务账号密码后，可通过云函数完成首次导入和后续自动同步。账号密码会加密保存在后端，不会用于后端直接访问学校系统。',
+      consentLabel: '加密保存账号密码，用于自动同步',
+    },
     dataAccess: {
-      course: ['manual_import'],
-      score: [],
-      exam: [],
-      profile: ['manual_import'],
+      course: ['cloud_worker', 'webview_client_fetch', 'manual_import'],
+      score: ['cloud_worker', 'webview_client_fetch', 'manual_import'],
+      exam: ['cloud_worker', 'webview_client_fetch', 'manual_import'],
+      profile: ['cloud_worker', 'webview_client_fetch', 'manual_import'],
     },
     featureDisplay: {
       course: {
@@ -30,6 +39,29 @@ export const whhxitProvider: SchoolProvider = {
         ],
         itemPath: 'courses',
         emptyText: '暂无课表数据',
+      },
+      score: {
+        title: '成绩',
+        kind: 'score_semesters',
+        summaryFields: [
+          { key: 'totalCredit', label: '总学分' },
+          { key: 'average', label: '平均分' },
+          { key: 'gpa', label: '绩点' },
+        ],
+        groupPath: 'semesters',
+        itemPath: 'grades',
+        itemFields: [
+          { key: 'name', label: '课程' },
+          { key: 'credit', label: '学分' },
+          { key: 'score', label: '成绩', primary: true },
+          { key: 'gpa', label: '绩点' },
+        ],
+        emptyText: '暂无成绩缓存',
+      },
+      exam: {
+        title: '考试',
+        kind: 'exam_list',
+        emptyText: '暂无考试安排',
       },
       profile: {
         title: '个人资料',

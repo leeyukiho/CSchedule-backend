@@ -4,6 +4,12 @@ import { PrismaService } from '../../common/prisma/prisma.service'
 import { ProviderDisplayService } from '../providers/provider-display.service'
 import { TimetableCacheResponse } from './timetable.types'
 
+const ENCODED_TERM_SEMESTERS: Record<string, number> = {
+  '3': 1,
+  '12': 2,
+  '16': 3,
+}
+
 @Injectable()
 export class TimetableService {
   constructor(
@@ -243,6 +249,12 @@ export class TimetableService {
     const text = this.cleanTermLabel(record.label ?? record.title ?? record.name ?? record.id)
       .replace(/\s+/g, '')
       .trim()
+    const encodedTerm = this.getEncodedTerm(record.id ?? record.label ?? record.title ?? record.name)
+
+    if (encodedTerm) {
+      return `${encodedTerm.yearStart}-${encodedTerm.yearEnd}-${encodedTerm.semester}`
+    }
+
     const yearMatch = text.match(/(20\d{2})[-~—至]?(20\d{2})/)
 
     if (!yearMatch) {
@@ -254,8 +266,12 @@ export class TimetableService {
       text.includes('下学期') ||
       /第?[二2]学期/.test(text) ||
       /[.-]?2$/.test(text)
+    const thirdSemester =
+      text.includes('第三学期') ||
+      /第?[三3]学期/.test(text) ||
+      /[.-]?3$/.test(text)
 
-    return `${yearMatch[1]}-${yearMatch[2]}-${secondSemester ? '2' : '1'}`
+    return `${yearMatch[1]}-${yearMatch[2]}-${thirdSemester ? '3' : secondSemester ? '2' : '1'}`
   }
 
   private cleanTermLabel(value: unknown) {
@@ -301,9 +317,9 @@ export class TimetableService {
     const text = value.replace(/\s+/g, ' ').trim()
     const compactText = text.replace(/\s+/g, '')
     const patterns = [
-      /(20\d{2})\s*[-~—至]\s*(20\d{2})\s*学年\s*第?\s*([一二两12])\s*学期/,
-      /(20\d{2})\s*[-~—至]\s*(20\d{2})[\s_-]*第?\s*([一二两12])\s*学期/,
-      /(20\d{2})\s*[-~—至]\s*(20\d{2})[\s._-]+([12])(?:\s*学期)?/,
+      /(20\d{2})\s*[-~—至]\s*(20\d{2})\s*学年\s*第?\s*([一二三两123])\s*学期/,
+      /(20\d{2})\s*[-~—至]\s*(20\d{2})[\s_-]*第?\s*([一二三两123])\s*学期/,
+      /(20\d{2})\s*[-~—至]\s*(20\d{2})[\s._-]+([123])(?:\s*学期)?/,
       /(20\d{2})\s*[-~—至]\s*(20\d{2}).*?([上下])\s*学期/,
     ]
 
@@ -312,8 +328,8 @@ export class TimetableService {
         const match = source.match(pattern)
 
         if (match) {
-          const semester = match[3] === '2' || match[3] === '二' || match[3] === '两' || match[3] === '下' ? '2' : '1'
-          return `${match[1]}-${match[2]} 第${semester}学期`
+          const semester = this.getSemesterNumber(match[3])
+          return `${match[1]}-${match[2]}学年第${semester}学期`
         }
       }
     }
@@ -322,13 +338,13 @@ export class TimetableService {
   }
 
   private getTermSortKey(value: unknown) {
-    const match = this.getTermKey(value).match(/^(20\d{2})-(20\d{2})-([12])$/)
+    const match = this.getTermKey(value).match(/^(20\d{2})-(20\d{2})-([123])$/)
 
     return match ? Number(match[1]) * 10 + Number(match[3]) : Number.NEGATIVE_INFINITY
   }
 
   private isNotFutureAcademicYear(value: unknown) {
-    const match = this.getTermKey(value).match(/^(20\d{2})-(20\d{2})-([12])$/)
+    const match = this.getTermKey(value).match(/^(20\d{2})-(20\d{2})-([123])$/)
 
     if (!match) {
       return true
@@ -342,6 +358,30 @@ export class TimetableService {
     const month = baseDate.getMonth()
 
     return month >= 8 ? year : year - 1
+  }
+
+  private getEncodedTerm(value: unknown) {
+    const match = String(value ?? '').trim().match(/^(20\d{2})-(3|12|16)$/)
+
+    if (!match) {
+      return null
+    }
+
+    const yearStart = Number(match[1])
+
+    return {
+      yearStart,
+      yearEnd: yearStart + 1,
+      semester: ENCODED_TERM_SEMESTERS[match[2]],
+    }
+  }
+
+  private getSemesterNumber(value: string) {
+    if (value === '3' || value === '三') {
+      return 3
+    }
+
+    return value === '2' || value === '二' || value === '两' || value === '下' ? 2 : 1
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

@@ -234,8 +234,10 @@ export class AdminService {
             id: true,
             schoolId: true,
             providerId: true,
+            studentNoEncrypted: true,
             displayName: true,
             status: true,
+            authState: true,
             school: {
               select: {
                 id: true,
@@ -247,12 +249,46 @@ export class AdminService {
         })
       : []
     const accountMap = new Map(accounts.map((account) => [account.id, account]))
+    const profileCaches = accountIds.length
+      ? await this.prisma.featureCache.findMany({
+          where: {
+            accountId: { in: accountIds as string[] },
+            target: 'profile',
+          },
+          orderBy: [{ accountId: 'asc' }, { syncedAt: 'desc' }],
+        })
+      : []
+    const profileCacheMap = new Map<string, (typeof profileCaches)[number]>()
+
+    for (const cache of profileCaches) {
+      if (!profileCacheMap.has(cache.accountId)) {
+        profileCacheMap.set(cache.accountId, cache)
+      }
+    }
 
     return {
-      items: items.map((item) => ({
-        ...item,
-        account: item.accountId ? accountMap.get(item.accountId) ?? null : null,
-      })),
+      items: items.map((item) => {
+        const account = item.accountId ? accountMap.get(item.accountId) ?? null : null
+        const profile = account
+          ? this.getFeedbackProfile(account.authState, profileCacheMap.get(account.id)?.dataJson)
+          : {}
+        const publicAccount = account
+          ? {
+              id: account.id,
+              schoolId: account.schoolId,
+              providerId: account.providerId,
+              displayName: account.displayName,
+              status: account.status,
+              school: account.school,
+            }
+          : null
+
+        return {
+          ...item,
+          account: publicAccount,
+          student: account ? this.getFeedbackStudentInfo(account, profile) : null,
+        }
+      }),
       total,
       limit,
       offset,
@@ -336,6 +372,64 @@ export class AdminService {
     }
 
     return result
+  }
+
+  private getFeedbackProfile(authState: unknown, cacheData: unknown) {
+    return {
+      ...this.asRecord(this.asRecord(authState).profile),
+      ...this.asRecord(cacheData),
+    }
+  }
+
+  private getFeedbackStudentInfo(
+    account: {
+      displayName: string | null
+      studentNoEncrypted: string | null
+    },
+    profile: Record<string, unknown>,
+  ) {
+    return {
+      name: this.getFirstText(profile, ['name', 'studentName', 'displayName']) ?? account.displayName,
+      studentNo:
+        this.getFirstText(profile, [
+          'maskedStudentId',
+          'studentId',
+          'studentNo',
+          'studentNumber',
+          'studentCode',
+          'xh',
+          'XH',
+        ]) ?? this.normalizeStoredStudentNo(account.studentNoEncrypted),
+      grade: this.getFirstText(profile, ['grade', 'level']),
+      major: this.getFirstText(profile, ['major']),
+      className: this.getFirstText(profile, ['className', 'class']),
+      level: this.getFirstText(profile, ['level']),
+    }
+  }
+
+  private getFirstText(record: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+      const value = record[key]
+      const text = typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : ''
+
+      if (text) {
+        return text
+      }
+    }
+
+    return undefined
+  }
+
+  private normalizeStoredStudentNo(value: string | null) {
+    const text = typeof value === 'string' ? value.trim() : ''
+
+    if (!text) {
+      return undefined
+    }
+
+    return text.startsWith('masked:') ? text.slice('masked:'.length) : text
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

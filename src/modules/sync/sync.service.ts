@@ -759,6 +759,7 @@ export class SyncService {
 
     if (
       message.includes('WTBU_INVALID_CREDENTIALS') ||
+      message.includes('WHHXIT_INVALID_CREDENTIALS') ||
       lowerMessage.includes('invalid credential') ||
       message.includes('密码错误') ||
       message.includes('用户名或密码') ||
