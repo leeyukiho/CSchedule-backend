@@ -1,6 +1,6 @@
-onlyBuiltDependencies:
-  - "@nestjs/core"
-  - "@prisma/client"
-  - "@prisma/engines"
-  - core-js-pure
-  - prisma
+allowBuilds:
+  "@nestjs/core": true
+  "@prisma/client": true
+  "@prisma/engines": true
+  core-js-pure: true
+  prisma: true
